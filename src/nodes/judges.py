@@ -9,10 +9,6 @@ from langchain_openai import ChatOpenAI
 from src.state import AgentState, JudicialOpinion
 
 
-def _rubric_map(rubric_dimensions: List[Dict]) -> Dict[str, Dict]:
-    return {str(d.get("id")): d for d in (rubric_dimensions or []) if d.get("id")}
-
-
 def _allowed_citations(state: AgentState, criterion_id: str) -> List[str]:
     evs = state["evidences"].get(criterion_id, [])
     out: List[str] = []
@@ -20,7 +16,7 @@ def _allowed_citations(state: AgentState, criterion_id: str) -> List[str]:
         loc = (e.location or "").strip()
         if loc:
             out.append(loc)
-    # de-dup, keep order
+
     seen = set()
     uniq: List[str] = []
     for x in out:
@@ -28,6 +24,7 @@ def _allowed_citations(state: AgentState, criterion_id: str) -> List[str]:
             continue
         seen.add(x)
         uniq.append(x)
+
     return uniq[:12]
 
 
@@ -41,15 +38,20 @@ def _sanitize_citations(cited: List[str], allowed: List[str]) -> List[str]:
         return []
     allowed_set = set(allowed)
     kept = [c for c in (cited or []) if c in allowed_set]
-    if kept:
-        return kept[:12]
-    return allowed[:12]
+    return kept[:12]
 
 
-def _run_judge(state: AgentState, role: str, role_instructions: str) -> List[JudicialOpinion]:
+def _run_judge(
+    state: AgentState,
+    role: str,
+    philosophy: str,
+    behavioral_contract: str,
+) -> List[JudicialOpinion]:
+
     llm = _judge_llm().with_structured_output(JudicialOpinion, include_raw=False)
 
     outputs: List[JudicialOpinion] = []
+
     for dim in state["rubric_dimensions"]:
         cid = str(dim["id"])
         evidence = state["evidences"].get(cid, [])
@@ -60,14 +62,15 @@ def _run_judge(state: AgentState, role: str, role_instructions: str) -> List[Jud
         failure = str(dim.get("failure_pattern", ""))
 
         prompt = (
-            f"Role: {role}\n"
-            f"{role_instructions}\n\n"
-            "Hard rule:\n"
-            "You must cite only from Allowed citations.\n"
-            "If Allowed citations is empty, cited_evidence must be an empty list.\n"
-            "You must not invent file paths, line numbers, tools, or commits.\n\n"
-            "Return a JudicialOpinion object only.\n"
-            "Score must be 1 to 5.\n\n"
+            f"You are acting as: {role}\n\n"
+            f"Philosophy:\n{philosophy}\n\n"
+            f"Behavioral contract:\n{behavioral_contract}\n\n"
+            "Mandatory constraints:\n"
+            "- Score must be integer 1 to 5.\n"
+            "- You must cite ONLY from Allowed citations.\n"
+            "- If Allowed citations is empty, cited_evidence must be [].\n"
+            "- Never invent file paths or tools.\n"
+            "- Return ONLY a JudicialOpinion object.\n\n"
             f"Criterion id: {cid}\n"
             f"Criterion name: {dim.get('name','')}\n\n"
             f"Forensic instruction:\n{forensic}\n\n"
@@ -80,7 +83,7 @@ def _run_judge(state: AgentState, role: str, role_instructions: str) -> List[Jud
         )
 
         op: JudicialOpinion = llm.invoke(prompt)
-        op.judge = role  # type: ignore[assignment]
+        op.judge = role
         op.criterion_id = cid
         op.cited_evidence = _sanitize_citations(op.cited_evidence, allowed)
         outputs.append(op)
@@ -89,27 +92,53 @@ def _run_judge(state: AgentState, role: str, role_instructions: str) -> List[Jud
 
 
 def prosecutor(state: AgentState) -> Dict:
-    ops = _run_judge(
-        state,
-        role="Prosecutor",
-        role_instructions="Be strict. Penalize missing artifacts and unsafe tooling.",
-    )
-    return {"opinions": ops}
+    return {
+        "opinions": _run_judge(
+            state,
+            role="Prosecutor",
+            philosophy=(
+                "Assume non-compliance unless explicitly proven. "
+                "Search for risk, vulnerability, architectural weakness, and missing artifacts."
+            ),
+            behavioral_contract=(
+                "Your argument must contain the word 'risk'. "
+                "Penalize ambiguity. "
+                "If deterministic logic is not visible in evidence, treat it as absent."
+            ),
+        )
+    }
 
 
 def defense(state: AgentState) -> Dict:
-    ops = _run_judge(
-        state,
-        role="Defense",
-        role_instructions="Be generous, but stay factual. Reward partial compliance only when evidence supports it.",
-    )
-    return {"opinions": ops}
+    return {
+        "opinions": _run_judge(
+            state,
+            role="Defense",
+            philosophy=(
+                "Assume good intent. Reward architectural effort when supported by evidence. "
+                "Partial compliance deserves proportional credit."
+            ),
+            behavioral_contract=(
+                "Your argument must contain the word 'effort'. "
+                "Acknowledge incremental improvement. "
+                "Interpret evidence in the developer’s favor when reasonable."
+            ),
+        )
+    }
 
 
 def tech_lead(state: AgentState) -> Dict:
-    ops = _run_judge(
-        state,
-        role="TechLead",
-        role_instructions="Be pragmatic. Focus on maintainability and correctness. Use evidence only.",
-    )
-    return {"opinions": ops}
+    return {
+        "opinions": _run_judge(
+            state,
+            role="TechLead",
+            philosophy=(
+                "Evaluate production readiness. Focus on maintainability, correctness, and operational safety."
+            ),
+            behavioral_contract=(
+                "Your argument must contain the word 'maintainability'. "
+                "Ignore academic language without implementation proof. "
+                "If a confirmed security flaw exists, cap score at 3."
+            ),
+        )
+    }

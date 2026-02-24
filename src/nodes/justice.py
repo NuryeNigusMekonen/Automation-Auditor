@@ -17,12 +17,7 @@ class CriterionVerdict:
 
 
 def _rubric_index(rubric_dimensions: List[Dict]) -> Dict[str, Dict]:
-    out: Dict[str, Dict] = {}
-    for d in rubric_dimensions or []:
-        did = str(d.get("id", "")).strip()
-        if did:
-            out[did] = d
-    return out
+    return {str(d.get("id")): d for d in rubric_dimensions or [] if d.get("id")}
 
 
 def _group_opinions(opinions: List[JudicialOpinion]) -> Dict[str, List[JudicialOpinion]]:
@@ -33,38 +28,31 @@ def _group_opinions(opinions: List[JudicialOpinion]) -> Dict[str, List[JudicialO
 
 
 def _scores_by_judge(ops: List[JudicialOpinion]) -> Dict[str, int]:
-    out: Dict[str, int] = {}
-    for op in ops:
-        out[str(op.judge)] = int(op.score)
-    return out
+    return {str(op.judge): int(op.score) for op in ops}
 
 
 def _variance(scores: List[int]) -> int:
-    if not scores:
-        return 0
-    return max(scores) - min(scores)
-
-
-def _pick_final_score(scores: Dict[str, int]) -> int:
-    if "TechLead" in scores:
-        return int(scores["TechLead"])
-    if "Prosecutor" in scores and "Defense" in scores:
-        return int(round((scores["Prosecutor"] + scores["Defense"]) / 2))
-    if scores:
-        return int(list(scores.values())[0])
-    return 1
+    return max(scores) - min(scores) if scores else 0
 
 
 def _security_flag(text: str) -> bool:
     t = (text or "").lower()
-    needles = ["os.system", "shell injection", "unsanitized", "no sanitization", "raw os.system"]
+    needles = ["os.system", "shell injection", "unsanitized", "raw os.system"]
     return any(n in t for n in needles)
 
 
 def _evidence_missing(evs: List[Evidence]) -> bool:
-    if not evs:
-        return False
-    return any(e.found is False for e in evs)
+    return any(e.found is False for e in (evs or []))
+
+
+def _pick_final_score(scores: Dict[str, int]) -> int:
+    if "TechLead" in scores:
+        return scores["TechLead"]
+    if "Prosecutor" in scores:
+        return scores["Prosecutor"]
+    if "Defense" in scores:
+        return scores["Defense"]
+    return 1
 
 
 def _render_markdown(
@@ -73,6 +61,7 @@ def _render_markdown(
     verdicts: List[CriterionVerdict],
     remediation_plan: str,
 ) -> str:
+
     lines: List[str] = []
     lines.append("# Audit Report")
     lines.append("")
@@ -103,16 +92,17 @@ def _render_markdown(
 
     lines.append("")
     lines.append("## Remediation Plan")
-    lines.append(remediation_plan or "No remediation plan generated.")
+    lines.append(remediation_plan)
     lines.append("")
     return "\n".join(lines)
 
 
 def chief_justice(state: Dict) -> Dict:
-    repo_url: str = state.get("repo_url", "")
-    rubric_dimensions: List[Dict] = state.get("rubric_dimensions", []) or []
-    evidences: Dict[str, List[Evidence]] = state.get("evidences", {}) or {}
-    opinions: List[JudicialOpinion] = state.get("opinions", []) or []
+
+    repo_url = state.get("repo_url", "")
+    rubric_dimensions = state.get("rubric_dimensions", []) or []
+    evidences = state.get("evidences", {}) or {}
+    opinions = state.get("opinions", []) or []
 
     rubric = _rubric_index(rubric_dimensions)
     grouped = _group_opinions(opinions)
@@ -120,11 +110,12 @@ def chief_justice(state: Dict) -> Dict:
     verdicts: List[CriterionVerdict] = []
     per_scores: List[int] = []
 
-    security_issue_found = False
+    security_issue = False
 
-    for crit_id, ops in grouped.items():
-        dim = rubric.get(crit_id, {})
-        crit_name = str(dim.get("name") or crit_id)
+    for cid, ops in grouped.items():
+
+        dim = rubric.get(cid, {})
+        name = str(dim.get("name") or cid)
 
         scores_map = _scores_by_judge(ops)
         raw_scores = list(scores_map.values())
@@ -132,55 +123,57 @@ def chief_justice(state: Dict) -> Dict:
 
         final_score = _pick_final_score(scores_map)
 
-        evs = evidences.get(crit_id, []) or []
+        evs = evidences.get(cid, [])
         if _evidence_missing(evs):
             final_score = min(final_score, 2)
 
         prosecutor_op = next((o for o in ops if o.judge == "Prosecutor"), None)
         if prosecutor_op and _security_flag(prosecutor_op.argument):
-            security_issue_found = True
+            security_issue = True
 
         dissent = ""
         if var > 2:
-            p = scores_map.get("Prosecutor")
-            d = scores_map.get("Defense")
-            t = scores_map.get("TechLead")
-            dissent = f"Variance {var}. Prosecutor={p}, Defense={d}, TechLead={t}. Final score follows TechLead priority, then evidence rules."
+            dissent = (
+                f"Variance {var}. "
+                f"Prosecutor={scores_map.get('Prosecutor')}, "
+                f"Defense={scores_map.get('Defense')}, "
+                f"TechLead={scores_map.get('TechLead')}. "
+                "Final score follows priority rules."
+            )
 
-        remediation = str(dim.get("failure_pattern") or dim.get("forensic_instruction") or "Add missing evidence and rerun.")
+        remediation = str(
+            dim.get("failure_pattern")
+            or dim.get("forensic_instruction")
+            or "Add missing implementation evidence."
+        )
+
         verdicts.append(
             CriterionVerdict(
-                criterion_id=crit_id,
-                criterion_name=crit_name,
+                criterion_id=cid,
+                criterion_name=name,
                 final_score=int(final_score),
                 dissent_summary=dissent,
                 remediation=remediation,
                 opinions=ops,
             )
         )
+
         per_scores.append(int(final_score))
 
     overall = (sum(per_scores) / len(per_scores)) if per_scores else 1.0
-    if security_issue_found:
+
+    if security_issue:
         overall = min(overall, 3.0)
 
-    low: List[Tuple[str, int]] = sorted(
-        [(v.criterion_id, v.final_score) for v in verdicts],
+    lowest = sorted(
+        [(v.criterion_name, v.final_score) for v in verdicts],
         key=lambda x: x[1],
     )
-    remediation_lines: List[str] = []
-    remediation_lines.append("Fix lowest scores first.")
-    for cid, sc in low[:5]:
-        dim = rubric.get(cid, {})
-        name = str(dim.get("name") or cid)
-        fp = str(dim.get("failure_pattern") or "").strip()
-        remediation_lines.append(f"- {name} ({cid}) score={sc}. {fp}")
 
-    md = _render_markdown(
-        repo_url=repo_url,
-        overall_score=overall,
-        verdicts=verdicts,
-        remediation_plan="\n".join(remediation_lines),
-    )
+    remediation_lines = ["Fix lowest scores first."]
+    for name, score in lowest[:5]:
+        remediation_lines.append(f"- {name} score={score}")
+
+    md = _render_markdown(repo_url, overall, verdicts, "\n".join(remediation_lines))
 
     return {"final_report_markdown": md, "final_report": {"overall_score": overall}}

@@ -1,126 +1,129 @@
+# src/tools/repo_scan_tools.py
 from __future__ import annotations
 
 import re
+import subprocess
+import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Tuple
 
 from src.state import Evidence
 
 
-def _read_text(p: Path) -> Optional[str]:
-    try:
-        return p.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return p.read_text(encoding="latin-1", errors="ignore")
-    except Exception:
-        return None
-
-
-def scan_state_management(repo_path: str) -> List[Evidence]:
-    goal = "state_management_rigor"
-    root = Path(repo_path)
-
-    candidates = [
-        root / "src" / "state.py",
-        root / "state.py",
-    ]
-    state_file = next((p for p in candidates if p.exists() and p.is_file()), None)
-    if not state_file:
-        return [
-            Evidence(
-                goal=goal,
-                found=False,
-                content=None,
-                location="repo",
-                rationale="No state.py found in common locations",
-                confidence=0.95,
-            )
-        ]
-
-    txt = _read_text(state_file) or ""
-    has_pydantic = "from pydantic" in txt or "BaseModel" in txt
-    has_typeddict = "TypedDict" in txt
-    has_annotated = "Annotated" in txt
-    has_reducers = "operator.add" in txt or "operator.ior" in txt
-
-    content = "\n".join(
-        [
-            f"state_file={state_file}",
-            f"has_pydantic={has_pydantic}",
-            f"has_typeddict={has_typeddict}",
-            f"has_annotated={has_annotated}",
-            f"has_reducers={has_reducers}",
-        ]
+def _run(cmd: List[str], cwd: str | None = None) -> Tuple[int, str, str]:
+    proc = subprocess.run(
+        cmd,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
     )
+    return proc.returncode, (proc.stdout or ""), (proc.stderr or "")
 
-    found = has_pydantic or has_typeddict
+
+def clone_repo_sandboxed(repo_url: str) -> str:
+    tmpdir = tempfile.TemporaryDirectory(prefix="auditor_repo_")
+    repo_path = Path(tmpdir.name) / "repo"
+
+    code, out, err = _run(["git", "clone", "--depth", "200", repo_url, str(repo_path)])
+    if code != 0:
+        tmpdir.cleanup()
+        raise RuntimeError(f"git clone failed. stdout={out.strip()} stderr={err.strip()}")
+
+    if not hasattr(clone_repo_sandboxed, "_keepers"):
+        clone_repo_sandboxed._keepers = []  # type: ignore[attr-defined]
+    clone_repo_sandboxed._keepers.append(tmpdir)  # type: ignore[attr-defined]
+
+    return str(repo_path)
+
+
+def extract_git_history(repo_path: str) -> List[Evidence]:
+    code, out, err = _run(["git", "-C", repo_path, "log", "--oneline", "--reverse", "--date=iso-strict"])
+    found = code == 0 and out.strip() != ""
+    content = out.strip() if found else (err.strip() or None)
+
     return [
         Evidence(
-            goal=goal,
+            goal="git_forensic_analysis",
             found=found,
             content=content,
-            location=str(state_file),
-            rationale="File scan for typed state and reducers",
-            confidence=0.85,
+            location="git log",
+            rationale="Collected git log from cloned repo in sandbox temp directory",
+            confidence=0.9 if found else 0.6,
         )
     ]
 
 
-def scan_safe_tooling(repo_path: str) -> List[Evidence]:
-    goal = "safe_tool_engineering"
+def scan_for_os_system(repo_path: str) -> List[Evidence]:
     root = Path(repo_path)
+    tools_dir = root / "src" / "tools"
 
-    py_files = []
-    for p in root.rglob("*.py"):
-        sp = str(p)
-        if "/.venv/" in sp or "/venv/" in sp or "__pycache__" in sp:
+    hits = []
+    safe_signals = []
+
+    for p in tools_dir.rglob("*.py"):
+        s = str(p)
+        if any(x in s for x in ["/.venv/", "/venv/", "__pycache__"]):
             continue
-        py_files.append(p)
 
-    os_system_hits: List[str] = []
-    tmpdir_hits: List[str] = []
-    subprocess_hits: List[str] = []
+        txt = p.read_text(encoding="utf-8", errors="ignore")
 
-    for p in py_files[:5000]:
-        txt = _read_text(p)
-        if not txt:
-            continue
         if "os.system(" in txt:
-            os_system_hits.append(str(p))
-        if "tempfile.TemporaryDirectory" in txt:
-            tmpdir_hits.append(str(p))
+            hits.append(str(p))
+
         if "subprocess.run(" in txt:
-            subprocess_hits.append(str(p))
+            safe_signals.append(f"{p}: uses subprocess.run")
 
-    found_safe_signals = bool(tmpdir_hits) and bool(subprocess_hits) and not bool(os_system_hits)
+        if "TemporaryDirectory(" in txt:
+            safe_signals.append(f"{p}: uses TemporaryDirectory")
 
-    content = "\n".join(
-        [
-            f"os_system_files={os_system_hits[:20]}",
-            f"tempdir_files={tmpdir_hits[:20]}",
-            f"subprocess_files={subprocess_hits[:20]}",
-        ]
-    )
+    found = False if hits else True
 
-    rationale = "Repo-wide scan for os.system usage and sandbox signals"
-    if os_system_hits:
-        rationale = "Found os.system usage. Unsafe by rubric."
+    content_lines = []
+    if hits:
+        content_lines.append("Unsafe usage detected:")
+        content_lines.extend(hits)
+    else:
+        content_lines.append("No os.system usage detected.")
 
-    loc = "repo_scan"
-    if os_system_hits:
-        loc = os_system_hits[0]
-    elif tmpdir_hits:
-        loc = tmpdir_hits[0]
-    elif subprocess_hits:
-        loc = subprocess_hits[0]
+    if safe_signals:
+        content_lines.append("Safe signals detected:")
+        content_lines.extend(safe_signals)
 
     return [
         Evidence(
-            goal=goal,
-            found=found_safe_signals,
-            content=content or None,
-            location=loc,
-            rationale=rationale,
-            confidence=0.8,
+            goal="safe_tool_engineering",
+            found=found,
+            content="\n".join(content_lines),
+            location="src/tools",
+            rationale="Static scan for unsafe shell execution and safe subprocess usage",
+            confidence=0.95 if found else 0.8,
+        )
+    ]
+
+def scan_for_repo_url_in_shell(repo_path: str) -> List[Evidence]:
+    root = Path(repo_path)
+    hits: List[str] = []
+    pattern = re.compile(r"os\.system\(|subprocess\.(run|Popen)\(", re.IGNORECASE)
+
+    for p in root.rglob("*.py"):
+        s = str(p)
+        if "/.venv/" in s or "/venv/" in s or "__pycache__" in s:
+            continue
+        try:
+            txt = p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        if pattern.search(txt):
+            hits.append(str(p))
+
+    return [
+        Evidence(
+            goal="safe_tool_engineering",
+            found=True,
+            content=("Shell execution call sites:\n" + "\n".join(hits[:200])) if hits else "No shell execution call sites detected.",
+            location="repo scan",
+            rationale="Locate command execution surfaces for review",
+            confidence=0.7,
         )
     ]
