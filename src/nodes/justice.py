@@ -1,247 +1,186 @@
-import json
-import os
-from typing import Dict, List, Optional, Tuple
+from __future__ import annotations
 
-from src.state import AgentState, AuditReport, CriterionResult, Evidence, JudicialOpinion
+from dataclasses import dataclass
+from typing import Dict, List, Tuple
+
+from src.state import Evidence, JudicialOpinion
 
 
-def _score_variance(scores: List[int]) -> int:
+@dataclass
+class CriterionVerdict:
+    criterion_id: str
+    criterion_name: str
+    final_score: int
+    dissent_summary: str
+    remediation: str
+    opinions: List[JudicialOpinion]
+
+
+def _rubric_index(rubric_dimensions: List[Dict]) -> Dict[str, Dict]:
+    out: Dict[str, Dict] = {}
+    for d in rubric_dimensions or []:
+        did = str(d.get("id", "")).strip()
+        if did:
+            out[did] = d
+    return out
+
+
+def _group_opinions(opinions: List[JudicialOpinion]) -> Dict[str, List[JudicialOpinion]]:
+    grouped: Dict[str, List[JudicialOpinion]] = {}
+    for op in opinions or []:
+        grouped.setdefault(op.criterion_id, []).append(op)
+    return grouped
+
+
+def _scores_by_judge(ops: List[JudicialOpinion]) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for op in ops:
+        out[str(op.judge)] = int(op.score)
+    return out
+
+
+def _variance(scores: List[int]) -> int:
     if not scores:
         return 0
     return max(scores) - min(scores)
 
 
-def _detect_confirmed_security_flaw(evidences: Dict[str, List[Evidence]]) -> bool:
-    evs = evidences.get("safe_tool_engineering", [])
-    for ev in evs:
-        if not ev.content:
-            continue
-        try:
-            payload = json.loads(ev.content)
-            if payload.get("os_system_detected") is True:
-                return True
-        except Exception:
-            continue
-    return False
+def _pick_final_score(scores: Dict[str, int]) -> int:
+    if "TechLead" in scores:
+        return int(scores["TechLead"])
+    if "Prosecutor" in scores and "Defense" in scores:
+        return int(round((scores["Prosecutor"] + scores["Defense"]) / 2))
+    if scores:
+        return int(list(scores.values())[0])
+    return 1
 
 
-def _dissent_summary(opinions: List[JudicialOpinion]) -> str:
-    p = [o for o in opinions if o.judge == "Prosecutor"]
-    d = [o for o in opinions if o.judge == "Defense"]
-    t = [o for o in opinions if o.judge == "TechLead"]
-    p_txt = p[0].argument if p else ""
-    d_txt = d[0].argument if d else ""
-    t_txt = t[0].argument if t else ""
-    return (
-        "Conflict detected.\n"
-        f"Prosecutor: {p_txt}\n"
-        f"Defense: {d_txt}\n"
-        f"TechLead: {t_txt}\n"
-    )
+def _security_flag(text: str) -> bool:
+    t = (text or "").lower()
+    needles = ["os.system", "shell injection", "unsanitized", "no sanitization", "raw os.system"]
+    return any(n in t for n in needles)
 
 
-def _pick_final_score(
-    dimension_id: str,
-    evidences: Dict[str, List[Evidence]],
-    opinions: List[JudicialOpinion],
-) -> Tuple[int, Optional[str]]:
-    scores = [o.score for o in opinions]
-    variance = _score_variance(scores)
-
-    # Rule of Security override
-    security_flaw = _detect_confirmed_security_flaw(evidences)
-    if security_flaw:
-        # cap at 3, but do not force to 3 if all are below
-        capped = min(3, max(scores)) if scores else 1
-        dissent = _dissent_summary(opinions) if variance > 2 else None
-        return capped, dissent
-
-    # Rule of Evidence (fact supremacy)
-    # If evidence for this dimension is missing/found False, cap score at 2
-    dim_evs = evidences.get(dimension_id, [])
-    if dim_evs and any(ev.found is False for ev in dim_evs):
-        cap = min(2, max(scores)) if scores else 1
-        dissent = _dissent_summary(opinions) if variance > 2 else None
-        return cap, dissent
-
-    # Variance re-evaluation rule
-    if variance > 2:
-        # Prefer TechLead as tie-breaker
-        tech = next((o for o in opinions if o.judge == "TechLead"), None)
-        final = tech.score if tech else sorted(scores)[1]
-        return final, _dissent_summary(opinions)
-
-    # Functionality weight for graph_orchestration
-    if dimension_id == "graph_orchestration":
-        tech = next((o for o in opinions if o.judge == "TechLead"), None)
-        if tech:
-            return tech.score, None
-
-    # Default: median
-    if not scores:
-        return 1, None
-    scores_sorted = sorted(scores)
-    final = scores_sorted[len(scores_sorted) // 2]
-    return final, None
+def _evidence_missing(evs: List[Evidence]) -> bool:
+    if not evs:
+        return False
+    return any(e.found is False for e in evs)
 
 
-def _remediation_for_dimension(dimension_id: str, evidences: Dict[str, List[Evidence]]) -> str:
-    if dimension_id == "safe_tool_engineering":
-        return (
-            "Replace any os.system usage with subprocess.run([...], check=False, capture_output=True, text=True).\n"
-            "Run git clone inside a sandboxed temporary directory.\n"
-            "Add error handling: check return codes and include stderr in Evidence when failures occur.\n"
-        )
-    if dimension_id == "graph_orchestration":
-        return (
-            "Ensure two parallel fan-out and fan-in patterns exist.\n"
-            "Detectives: START -> (repo_investigator, doc_analyst, vision_inspector) -> evidence_aggregator.\n"
-            "Judges: evidence_aggregator -> (prosecutor, defense, techlead) -> chief_justice.\n"
-            "Add at least one conditional edge for missing PDF or node failure handling.\n"
-        )
-    if dimension_id == "structured_output_enforcement":
-        return (
-            "Call LLM using with_structured_output(JudicialOpinion) or bind_tools bound to JudicialOpinion.\n"
-            "Retry once on parse failure.\n"
-            "Reject free text outputs.\n"
-        )
-    if dimension_id == "judicial_nuance":
-        return (
-            "Make Prosecutor, Defense, TechLead prompts materially different.\n"
-            "Ensure each judge uses a distinct philosophy and produces different trade-off reasoning.\n"
-            "Run judges in parallel branches in the graph.\n"
-        )
-    if dimension_id == "report_accuracy":
-        return (
-            "List all file paths referenced in the PDF.\n"
-            "Cross-reference with repo file list.\n"
-            "Remove or correct hallucinated file claims.\n"
-        )
-    if dimension_id == "theoretical_depth":
-        return (
-            "Explain Dialectical Synthesis with concrete mapping to your graph.\n"
-            "Explain Fan-In/Fan-Out using specific node names and edges.\n"
-            "Explain Metacognition as the evaluator judging evaluator quality.\n"
-        )
-    if dimension_id == "swarm_visual":
-        return (
-            "Add a diagram that shows two parallel sections.\n"
-            "Detectives fan-out then fan-in.\n"
-            "Judges fan-out then fan-in.\n"
-            "Show Chief Justice synthesis to END.\n"
-        )
-    if dimension_id == "git_forensic_analysis":
-        return (
-            "Use more than 3 commits.\n"
-            "Commit progression should reflect setup, tool engineering, graph wiring, judicial layer, synthesis.\n"
-            "Avoid bulk upload patterns.\n"
-        )
-    if dimension_id == "state_management_rigor":
-        return (
-            "Use Pydantic BaseModel for Evidence and JudicialOpinion.\n"
-            "Use TypedDict for AgentState.\n"
-            "Use Annotated reducers operator.add and operator.ior to prevent parallel overwrites.\n"
-        )
-    if dimension_id == "chief_justice_synthesis":
-        return (
-            "Chief Justice must be deterministic Python logic.\n"
-            "Implement security override, fact supremacy, and dissent requirement.\n"
-            "Write final Markdown report to file.\n"
-        )
-    return "Add file-level fixes that match the rubric success pattern for this criterion.\n"
-
-
-def _render_markdown(report: AuditReport) -> str:
+def _render_markdown(
+    repo_url: str,
+    overall_score: float,
+    verdicts: List[CriterionVerdict],
+    remediation_plan: str,
+) -> str:
     lines: List[str] = []
     lines.append("# Audit Report")
     lines.append("")
     lines.append("## Executive Summary")
-    lines.append("")
-    lines.append(report.executive_summary.strip())
-    lines.append("")
-    lines.append(f"Overall Score: {report.overall_score:.2f}")
+    lines.append(f"Repo: {repo_url}")
+    lines.append(f"Overall score: {overall_score:.2f} / 5.00")
     lines.append("")
     lines.append("## Criterion Breakdown")
-    lines.append("")
-    for c in report.criteria:
-        lines.append(f"### {c.dimension_name} ({c.dimension_id})")
+
+    for v in verdicts:
         lines.append("")
-        lines.append(f"Final Score: {c.final_score}")
-        lines.append("")
-        if c.dissent_summary:
-            lines.append("Dissent Summary:")
-            lines.append(c.dissent_summary.strip())
-            lines.append("")
-        lines.append("Judge Opinions:")
-        for o in c.judge_opinions:
-            lines.append(f"- {o.judge} Score {o.score}: {o.argument.strip()}")
-            if o.cited_evidence:
-                lines.append(f"  Cited evidence: {', '.join(o.cited_evidence)}")
-        lines.append("")
+        lines.append(f"### {v.criterion_name} ({v.criterion_id})")
+        lines.append(f"Final score: {v.final_score} / 5")
+
+        if v.dissent_summary:
+            lines.append("Dissent:")
+            lines.append(v.dissent_summary)
+
+        lines.append("Judge opinions:")
+        for op in v.opinions:
+            lines.append(f"- {op.judge}: {op.score}/5")
+            lines.append(f"  Argument: {op.argument}")
+            if op.cited_evidence:
+                lines.append(f"  Cited evidence: {', '.join(op.cited_evidence)}")
+
         lines.append("Remediation:")
-        lines.append(c.remediation.strip())
-        lines.append("")
-    lines.append("## Remediation Plan")
+        lines.append(v.remediation)
+
     lines.append("")
-    lines.append(report.remediation_plan.strip())
+    lines.append("## Remediation Plan")
+    lines.append(remediation_plan or "No remediation plan generated.")
     lines.append("")
     return "\n".join(lines)
 
 
-def chief_justice(state: AgentState) -> AgentState:
-    dims = state.get("rubric_dimensions", [])
-    evidences = state.get("evidences", {})
-    opinions_all = state.get("opinions", [])
+def chief_justice(state: Dict) -> Dict:
+    repo_url: str = state.get("repo_url", "")
+    rubric_dimensions: List[Dict] = state.get("rubric_dimensions", []) or []
+    evidences: Dict[str, List[Evidence]] = state.get("evidences", {}) or {}
+    opinions: List[JudicialOpinion] = state.get("opinions", []) or []
 
-    criteria: List[CriterionResult] = []
+    rubric = _rubric_index(rubric_dimensions)
+    grouped = _group_opinions(opinions)
 
-    for dim in dims:
-        did = dim["id"]
-        dname = dim["name"]
-        opinions = [o for o in opinions_all if o.criterion_id == did]
-        final_score, dissent = _pick_final_score(did, evidences, opinions)
-        remediation = _remediation_for_dimension(did, evidences)
+    verdicts: List[CriterionVerdict] = []
+    per_scores: List[int] = []
 
-        criteria.append(
-            CriterionResult(
-                dimension_id=did,
-                dimension_name=dname,
-                final_score=final_score,
-                judge_opinions=opinions,
-                dissent_summary=dissent if _score_variance([o.score for o in opinions]) > 2 else None,
+    security_issue_found = False
+
+    for crit_id, ops in grouped.items():
+        dim = rubric.get(crit_id, {})
+        crit_name = str(dim.get("name") or crit_id)
+
+        scores_map = _scores_by_judge(ops)
+        raw_scores = list(scores_map.values())
+        var = _variance(raw_scores)
+
+        final_score = _pick_final_score(scores_map)
+
+        evs = evidences.get(crit_id, []) or []
+        if _evidence_missing(evs):
+            final_score = min(final_score, 2)
+
+        prosecutor_op = next((o for o in ops if o.judge == "Prosecutor"), None)
+        if prosecutor_op and _security_flag(prosecutor_op.argument):
+            security_issue_found = True
+
+        dissent = ""
+        if var > 2:
+            p = scores_map.get("Prosecutor")
+            d = scores_map.get("Defense")
+            t = scores_map.get("TechLead")
+            dissent = f"Variance {var}. Prosecutor={p}, Defense={d}, TechLead={t}. Final score follows TechLead priority, then evidence rules."
+
+        remediation = str(dim.get("failure_pattern") or dim.get("forensic_instruction") or "Add missing evidence and rerun.")
+        verdicts.append(
+            CriterionVerdict(
+                criterion_id=crit_id,
+                criterion_name=crit_name,
+                final_score=int(final_score),
+                dissent_summary=dissent,
                 remediation=remediation,
+                opinions=ops,
             )
         )
+        per_scores.append(int(final_score))
 
-    if criteria:
-        overall = sum(c.final_score for c in criteria) / float(len(criteria))
-    else:
-        overall = 1.0
+    overall = (sum(per_scores) / len(per_scores)) if per_scores else 1.0
+    if security_issue_found:
+        overall = min(overall, 3.0)
 
-    executive = (
-        "This audit report was generated by a Digital Courtroom agent.\n"
-        "Detectives produced forensic evidence. Judges scored each criterion independently.\n"
-        "Chief Justice applied deterministic synthesis rules to produce final scores and remediation steps."
+    low: List[Tuple[str, int]] = sorted(
+        [(v.criterion_id, v.final_score) for v in verdicts],
+        key=lambda x: x[1],
     )
+    remediation_lines: List[str] = []
+    remediation_lines.append("Fix lowest scores first.")
+    for cid, sc in low[:5]:
+        dim = rubric.get(cid, {})
+        name = str(dim.get("name") or cid)
+        fp = str(dim.get("failure_pattern") or "").strip()
+        remediation_lines.append(f"- {name} ({cid}) score={sc}. {fp}")
 
-    remediation_plan = "Prioritize safety and orchestration first. Then improve structured outputs and documentation accuracy.\n"
-
-    report = AuditReport(
-        repo_url=state["repo_url"],
-        executive_summary=executive,
+    md = _render_markdown(
+        repo_url=repo_url,
         overall_score=overall,
-        criteria=criteria,
-        remediation_plan=remediation_plan,
+        verdicts=verdicts,
+        remediation_plan="\n".join(remediation_lines),
     )
 
-    state["final_report"] = report
-
-    md = _render_markdown(report)
-
-    out_path = state.get("out_path") or ""
-    if out_path:
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        with open(out_path, "w", encoding="utf-8") as f:
-            f.write(md)
-
-    return state
+    return {"final_report_markdown": md, "final_report": {"overall_score": overall}}

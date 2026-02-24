@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import json
+import os
 from typing import Dict, List
 
 from langchain_openai import ChatOpenAI
@@ -6,113 +9,107 @@ from langchain_openai import ChatOpenAI
 from src.state import AgentState, JudicialOpinion
 
 
-def _persona_system_prompt(judge: str) -> str:
-    if judge == "Prosecutor":
-        return (
-            "You are the Prosecutor Judge.\n"
-            "Trust no one. Assume shortcuts.\n"
-            "If evidence suggests linear orchestration, missing typed state, missing structured output, or unsafe tooling, score low.\n"
-            "You must cite evidence keys in cited_evidence.\n"
-            "Return only structured output."
-        )
-    if judge == "Defense":
-        return (
-            "You are the Defense Judge.\n"
-            "Reward effort and intent.\n"
-            "If evidence shows deep thought, iteration, or partial compliance, give partial credit.\n"
-            "You must cite evidence keys in cited_evidence.\n"
-            "Return only structured output."
-        )
-    return (
-        "You are the TechLead Judge.\n"
-        "Be pragmatic. Does it work and is it maintainable.\n"
-        "Tie-break between Prosecutor and Defense.\n"
-        "Weight architectural correctness and safety highest.\n"
-        "You must cite evidence keys in cited_evidence.\n"
-        "Return only structured output."
-    )
+def _rubric_map(rubric_dimensions: List[Dict]) -> Dict[str, Dict]:
+    return {str(d.get("id")): d for d in (rubric_dimensions or []) if d.get("id")}
 
 
-def _judge_one(llm: ChatOpenAI, judge: str, dim: Dict, evidence_packet: str) -> JudicialOpinion:
-    sys = _persona_system_prompt(judge)
-    user = {
-        "task": "Score this criterion from 1 to 5 and provide a precise argument and cited evidence keys.",
-        "criterion_id": dim["id"],
-        "criterion_name": dim["name"],
-        "forensic_instruction": dim.get("forensic_instruction", ""),
-        "success_pattern": dim.get("success_pattern", ""),
-        "failure_pattern": dim.get("failure_pattern", ""),
-        "evidence_packet_json": json.loads(evidence_packet) if evidence_packet else {},
-        "output_rules": {
-            "score_range": "1..5",
-            "argument": "Must reference evidence facts and rubric patterns",
-            "cited_evidence": "List of criterion ids you used, e.g. ['graph_orchestration']",
-        },
-    }
-
-    model = llm.with_structured_output(JudicialOpinion)
-    # retry if structured parsing fails
-    last_err = None
-    for _ in range(2):
-        try:
-            out = model.invoke(
-                [
-                    {"role": "system", "content": sys},
-                    {"role": "user", "content": json.dumps(user, indent=2)},
-                ]
-            )
-            # fill required fields if missing
-            out.judge = judge  # type: ignore
-            out.criterion_id = dim["id"]  # type: ignore
-            if not out.cited_evidence:
-                out.cited_evidence = [dim["id"]]  # type: ignore
-            return out
-        except Exception as e:
-            last_err = e
+def _allowed_citations(state: AgentState, criterion_id: str) -> List[str]:
+    evs = state["evidences"].get(criterion_id, [])
+    out: List[str] = []
+    for e in evs:
+        loc = (e.location or "").strip()
+        if loc:
+            out.append(loc)
+    # de-dup, keep order
+    seen = set()
+    uniq: List[str] = []
+    for x in out:
+        if x in seen:
             continue
-    raise RuntimeError(f"Judge {judge} failed to produce structured output for {dim['id']}: {last_err}")
+        seen.add(x)
+        uniq.append(x)
+    return uniq[:12]
 
 
-def prosecutor_node(state: AgentState) -> AgentState:
-    llm = ChatOpenAI(model=state.get("model", "gpt-4o-mini"), temperature=0)
-    packets = state.get("evidence_packets", {})
-    dims = state.get("rubric_dimensions", [])
-    opinions: List[JudicialOpinion] = []
-
-    for dim in dims:
-        pid = dim["id"]
-        evidence_packet = packets.get(pid, "")
-        opinions.append(_judge_one(llm, "Prosecutor", dim, evidence_packet))
-
-    state["opinions"] = opinions
-    return state
+def _judge_llm() -> ChatOpenAI:
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    return ChatOpenAI(model=model, temperature=0)
 
 
-def defense_node(state: AgentState) -> AgentState:
-    llm = ChatOpenAI(model=state.get("model", "gpt-4o-mini"), temperature=0)
-    packets = state.get("evidence_packets", {})
-    dims = state.get("rubric_dimensions", [])
-    opinions: List[JudicialOpinion] = []
-
-    for dim in dims:
-        pid = dim["id"]
-        evidence_packet = packets.get(pid, "")
-        opinions.append(_judge_one(llm, "Defense", dim, evidence_packet))
-
-    state["opinions"] = opinions
-    return state
+def _sanitize_citations(cited: List[str], allowed: List[str]) -> List[str]:
+    if not allowed:
+        return []
+    allowed_set = set(allowed)
+    kept = [c for c in (cited or []) if c in allowed_set]
+    if kept:
+        return kept[:12]
+    return allowed[:12]
 
 
-def techlead_node(state: AgentState) -> AgentState:
-    llm = ChatOpenAI(model=state.get("model", "gpt-4o-mini"), temperature=0)
-    packets = state.get("evidence_packets", {})
-    dims = state.get("rubric_dimensions", [])
-    opinions: List[JudicialOpinion] = []
+def _run_judge(state: AgentState, role: str, role_instructions: str) -> List[JudicialOpinion]:
+    llm = _judge_llm().with_structured_output(JudicialOpinion, include_raw=False)
 
-    for dim in dims:
-        pid = dim["id"]
-        evidence_packet = packets.get(pid, "")
-        opinions.append(_judge_one(llm, "TechLead", dim, evidence_packet))
+    outputs: List[JudicialOpinion] = []
+    for dim in state["rubric_dimensions"]:
+        cid = str(dim["id"])
+        evidence = state["evidences"].get(cid, [])
+        allowed = _allowed_citations(state, cid)
 
-    state["opinions"] = opinions
-    return state
+        forensic = str(dim.get("forensic_instruction", ""))
+        success = str(dim.get("success_pattern", ""))
+        failure = str(dim.get("failure_pattern", ""))
+
+        prompt = (
+            f"Role: {role}\n"
+            f"{role_instructions}\n\n"
+            "Hard rule:\n"
+            "You must cite only from Allowed citations.\n"
+            "If Allowed citations is empty, cited_evidence must be an empty list.\n"
+            "You must not invent file paths, line numbers, tools, or commits.\n\n"
+            "Return a JudicialOpinion object only.\n"
+            "Score must be 1 to 5.\n\n"
+            f"Criterion id: {cid}\n"
+            f"Criterion name: {dim.get('name','')}\n\n"
+            f"Forensic instruction:\n{forensic}\n\n"
+            f"Success pattern:\n{success}\n\n"
+            f"Failure pattern:\n{failure}\n\n"
+            "Allowed citations:\n"
+            f"{json.dumps(allowed, indent=2)}\n\n"
+            "Evidence JSON:\n"
+            f"{json.dumps([e.model_dump() for e in evidence], indent=2)}\n"
+        )
+
+        op: JudicialOpinion = llm.invoke(prompt)
+        op.judge = role  # type: ignore[assignment]
+        op.criterion_id = cid
+        op.cited_evidence = _sanitize_citations(op.cited_evidence, allowed)
+        outputs.append(op)
+
+    return outputs
+
+
+def prosecutor(state: AgentState) -> Dict:
+    ops = _run_judge(
+        state,
+        role="Prosecutor",
+        role_instructions="Be strict. Penalize missing artifacts and unsafe tooling.",
+    )
+    return {"opinions": ops}
+
+
+def defense(state: AgentState) -> Dict:
+    ops = _run_judge(
+        state,
+        role="Defense",
+        role_instructions="Be generous, but stay factual. Reward partial compliance only when evidence supports it.",
+    )
+    return {"opinions": ops}
+
+
+def tech_lead(state: AgentState) -> Dict:
+    ops = _run_judge(
+        state,
+        role="TechLead",
+        role_instructions="Be pragmatic. Focus on maintainability and correctness. Use evidence only.",
+    )
+    return {"opinions": ops}
