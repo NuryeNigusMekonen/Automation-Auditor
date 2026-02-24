@@ -1,72 +1,98 @@
-## Goal
-# Parse and chunk PDF.
-
-## Checklist
-# Extract text
-# Chunk into list
-#Extract file paths mentioned
-# src/tools/pdf_tools.py
-from __future__ import annotations
 import re
+from dataclasses import dataclass
 from typing import Dict, List, Tuple
+
 from pypdf import PdfReader
 
 
-def ingest_pdf(pdf_path: str, chunk_chars: int = 1600, overlap: int = 200) -> Dict:
-    """
-    Extracts text and chunks it for RAG-lite querying.
-    Returns dict with chunks and extracted file paths.
-    """
+@dataclass
+class PdfIngest:
+    full_text: str
+    chunks: List[str]
+    keyword_hits: Dict[str, List[str]]
+    mentioned_paths: List[str]
+
+
+def extract_text(pdf_path: str) -> str:
     reader = PdfReader(pdf_path)
-    pages: List[str] = []
-    for p in reader.pages:
+    texts: List[str] = []
+    for page in reader.pages:
         try:
-            pages.append(p.extract_text() or "")
+            t = page.extract_text() or ""
         except Exception:
-            pages.append("")
-
-    full = "\n".join(pages)
-    chunks = _chunk_text(full, chunk_chars=chunk_chars, overlap=overlap)
-    paths = _extract_paths(full)
-    return {"full_text_len": len(full), "chunks": chunks, "paths_mentioned": paths}
+            t = ""
+        if t:
+            texts.append(t)
+    return "\n".join(texts)
 
 
-def search_chunks(chunks: List[str], query: str, top_k: int = 5) -> List[Tuple[int, str]]:
-    """
-    Simple keyword scoring. No embeddings.
-    """
-    q = (query or "").lower().strip()
-    if not q:
+def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 150) -> List[str]:
+    if not text.strip():
         return []
-    scored: List[Tuple[int, int]] = []
-    for i, c in enumerate(chunks):
-        score = c.lower().count(q)
-        if score > 0:
-            scored.append((score, i))
-    scored.sort(reverse=True)
-    out: List[Tuple[int, str]] = []
-    for score, idx in scored[:top_k]:
-        out.append((idx, chunks[idx]))
-    return out
-
-
-_PATH_RE = re.compile(r"\b(?:src|rubric|audit)/[A-Za-z0-9_\-./]+\b")
-
-
-def _extract_paths(text: str) -> List[str]:
-    return sorted(set(_PATH_RE.findall(text or "")))
-
-
-def _chunk_text(text: str, chunk_chars: int, overlap: int) -> List[str]:
-    t = text or ""
-    if not t:
-        return []
-    out: List[str] = []
+    chunks: List[str] = []
     i = 0
-    while i < len(t):
-        j = min(len(t), i + chunk_chars)
-        out.append(t[i:j])
-        if j == len(t):
+    while i < len(text):
+        end = min(len(text), i + chunk_size)
+        chunks.append(text[i:end])
+        i = end - overlap
+        if i < 0:
+            i = 0
+        if end == len(text):
             break
-        i = max(0, j - overlap)
+    return chunks
+
+
+def find_keywords(text: str, keywords: List[str]) -> Dict[str, List[str]]:
+    hits: Dict[str, List[str]] = {k: [] for k in keywords}
+    lower = text.lower()
+    for k in keywords:
+        kl = k.lower()
+        idx = 0
+        while True:
+            j = lower.find(kl, idx)
+            if j == -1:
+                break
+            start = max(0, j - 80)
+            end = min(len(text), j + len(k) + 80)
+            snippet = text[start:end].replace("\n", " ").strip()
+            hits[k].append(snippet)
+            idx = j + len(kl)
+    return hits
+
+
+_PATH_RE = re.compile(r"\b[a-zA-Z0-9_\-]+(?:/[a-zA-Z0-9_\-\.]+)+\.(?:py|ts|md|json|yaml|yml)\b")
+
+
+def extract_file_paths(text: str) -> List[str]:
+    paths = _PATH_RE.findall(text or "")
+    # normalize duplicates
+    seen = set()
+    out: List[str] = []
+    for p in paths:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
     return out
+
+
+def ingest_pdf(pdf_path: str) -> PdfIngest:
+    text = extract_text(pdf_path)
+    chunks = chunk_text(text)
+    keywords = ["Dialectical Synthesis", "Fan-In", "Fan-Out", "Metacognition", "State Synchronization"]
+    hits = find_keywords(text, keywords)
+    mentioned = extract_file_paths(text)
+    return PdfIngest(full_text=text, chunks=chunks, keyword_hits=hits, mentioned_paths=mentioned)
+
+
+def cross_reference_paths(mentioned_paths: List[str], repo_files: List[str]) -> Tuple[List[str], List[str]]:
+    repo_set = set(repo_files)
+    verified: List[str] = []
+    hallucinated: List[str] = []
+    for p in mentioned_paths:
+        # allow both with and without leading ./ or root folder
+        p2 = p.lstrip("./")
+        if p2 in repo_set:
+            verified.append(p)
+        else:
+            hallucinated.append(p)
+    return verified, hallucinated

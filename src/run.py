@@ -1,72 +1,53 @@
-## Goal
-# CLI entry point.
-
-# Checklist
-# Parse args: repo, pdf, out, max_concurrency, disable_vision
-# Load rubric json from rubric/week2_rubric.json
-# Build initial state
-# Invoke graph
-# Write final_report to output path
-
-## Output
-# Running the CLI writes a markdown file under audit/report_onpeer_generated.
-
-# Write report file
-# Executive Summary
-# Criterion Breakdown
-# Remediation Plan
-
-# src/run.py
-from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
+
 from dotenv import load_dotenv
 
 from src.graph import build_graph
-from src.tools.git_tools import cleanup_workdir
 
 
-def main() -> int:
+def load_rubric(path: str) -> list[dict]:
+    with open(path, "r", encoding="utf-8") as f:
+        obj = json.load(f)
+    return obj["dimensions"]
+
+
+def main():
     load_dotenv()
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True, help="GitHub repo URL")
-    ap.add_argument("--pdf", required=True, help="Path to PDF report")
-    ap.add_argument("--out", default="audit/report_onpeer_generated/audit_report.md", help="Output markdown path")
+    ap.add_argument("--pdf", required=True, help="PDF report path")
+    ap.add_argument("--out", required=True, help="Output markdown path")
+    ap.add_argument("--rubric", default="rubric/week2_rubric.json", help="Rubric JSON path")
+    ap.add_argument("--model", default="gpt-4o-mini", help="LLM model for judges")
+    ap.add_argument("--enable-vision", action="store_true", help="Enable PDF image extraction node")
     args = ap.parse_args()
 
-    rubric_path = Path("rubric/week2_rubric.json")
-    rubric = json.loads(rubric_path.read_text(encoding="utf-8"))
-    dims = rubric.get("dimensions", [])
+    dims = load_rubric(args.rubric)
 
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    graph = build_graph()
 
-    state = {
+    init_state = {
         "repo_url": args.repo,
         "pdf_path": args.pdf,
-        "out_path": str(out_path),
+        "out_path": args.out,
+        "enable_vision": bool(args.enable_vision),
+        "model": args.model,
         "rubric_dimensions": dims,
-        "evidences": {},
-        "opinions": [],
         "workdir": "",
         "repo_local_path": "",
         "repo_commit_sha": "",
-        "final_report": "",
+        "evidences": {},
+        "opinions": [],
+        "evidence_packets": {},
+        "final_report": None,
     }
 
-    g = build_graph()
-    final_state = None
-    try:
-        final_state = g.invoke(state)
-        out_path.write_text(final_state["final_report"], encoding="utf-8")
-        return 0
-    finally:
-        if final_state and final_state.get("workdir"):
-            cleanup_workdir(final_state["workdir"])
+    graph.invoke(init_state)
+    print(f"Wrote report: {args.out}")
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

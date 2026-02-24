@@ -1,14 +1,4 @@
-## Goal
-# Safe clone and git log extraction.
-
-## Checklist
-# Clone into tempfile
-# Return commit messages and timestamps
-# No os.system
-# src/tools/git_tools.py
-from __future__ import annotations
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -16,60 +6,61 @@ from dataclasses import dataclass
 from typing import List, Tuple
 
 
-@dataclass(frozen=True)
+@dataclass
 class GitCommit:
     sha: str
     ts: str
     msg: str
 
 
-class GitError(RuntimeError):
+class GitToolError(RuntimeError):
     pass
 
 
-def _run(cmd: List[str], cwd: str | None = None) -> str:
+def _run(cmd: List[str], cwd: str | None = None) -> subprocess.CompletedProcess:
     try:
-        p = subprocess.run(
+        return subprocess.run(
             cmd,
             cwd=cwd,
-            check=True,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
+            check=False,
         )
-        return p.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        raise GitError(f"Command failed: {' '.join(cmd)}\n{e.stderr.strip()}") from e
+    except Exception as e:
+        raise GitToolError(f"Command failed to start: {cmd}. Error: {e}") from e
 
 
 def clone_repo(repo_url: str) -> Tuple[str, str]:
     """
-    Clones repo into a sandboxed temp directory.
-    Returns (repo_path, workdir).
+    Clones into an isolated temp directory.
+    Returns (workdir, repo_path).
     """
-    workdir = tempfile.mkdtemp(prefix="auditor_")
+    workdir = tempfile.mkdtemp(prefix="auditor_repo_")
     repo_path = os.path.join(workdir, "repo")
-    _run(["git", "clone", "--depth", "50", repo_url, repo_path])
-    sha = _run(["git", "rev-parse", "HEAD"], cwd=repo_path)
-    return repo_path, workdir
 
-
-def cleanup_workdir(workdir: str) -> None:
-    if workdir and os.path.isdir(workdir):
+    cp = _run(["git", "clone", "--depth", "200", repo_url, repo_path])
+    if cp.returncode != 0:
         shutil.rmtree(workdir, ignore_errors=True)
+        raise GitToolError(f"git clone failed: {cp.stderr.strip()}")
+
+    return workdir, repo_path
 
 
-def extract_git_history(repo_path: str) -> List[GitCommit]:
-    """
-    Uses: git log --oneline --reverse
-    Also captures timestamps for narrative.
-    """
-    # Format: sha|iso-strict|subject
-    out = _run(["git", "log", "--reverse", "--pretty=format:%H|%cI|%s"], cwd=repo_path)
+def get_head_commit(repo_path: str) -> str:
+    cp = _run(["git", "rev-parse", "HEAD"], cwd=repo_path)
+    if cp.returncode != 0:
+        raise GitToolError(f"git rev-parse failed: {cp.stderr.strip()}")
+    return cp.stdout.strip()
+
+
+def get_git_log(repo_path: str, max_commits: int = 200) -> List[GitCommit]:
+    fmt = "%H|%ct|%s"
+    cp = _run(["git", "log", f"--max-count={max_commits}", f"--pretty=format:{fmt}", "--reverse"], cwd=repo_path)
+    if cp.returncode != 0:
+        raise GitToolError(f"git log failed: {cp.stderr.strip()}")
+
     commits: List[GitCommit] = []
-    if not out:
-        return commits
-    for line in out.splitlines():
+    for line in cp.stdout.splitlines():
         parts = line.split("|", 2)
         if len(parts) != 3:
             continue
@@ -78,32 +69,29 @@ def extract_git_history(repo_path: str) -> List[GitCommit]:
 
 
 def list_repo_files(repo_path: str) -> List[str]:
-    out = _run(["git", "ls-files"], cwd=repo_path)
-    return [l.strip() for l in out.splitlines() if l.strip()]
+    out: List[str] = []
+    for root, _, files in os.walk(repo_path):
+        for f in files:
+            p = os.path.join(root, f)
+            rel = os.path.relpath(p, repo_path)
+            out.append(rel)
+    return sorted(out)
 
 
-def scan_for_unsafe_os_system(repo_path: str) -> List[str]:
+def scan_for_os_system(repo_path: str) -> bool:
     """
-    Heuristic: looks for os.system(...) usage in python files.
-    Returns file paths that contain it.
+    Quick security check.
+    This is NOT used as the main analysis for structure, only as a security signal.
     """
-    hits: List[str] = []
     for rel in list_repo_files(repo_path):
         if not rel.endswith(".py"):
             continue
-        abs_path = os.path.join(repo_path, rel)
+        abs_p = os.path.join(repo_path, rel)
         try:
-            with open(abs_path, "r", encoding="utf-8") as f:
+            with open(abs_p, "r", encoding="utf-8", errors="ignore") as f:
                 txt = f.read()
             if "os.system(" in txt:
-                hits.append(rel)
-        except OSError:
+                return True
+        except Exception:
             continue
-    return hits
-
-
-_PATH_RE = re.compile(r"\b(?:src|rubric|audit)/[A-Za-z0-9_\-./]+\b")
-
-
-def extract_paths_from_text(text: str) -> List[str]:
-    return sorted(set(_PATH_RE.findall(text or "")))
+    return False

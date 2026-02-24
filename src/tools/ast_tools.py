@@ -1,100 +1,97 @@
-## Goal
-# Analyze graph structure.
-
-## Checklist
-# Parse python files
-# Detect StateGraph usage, add_edge fan-out and fan-in patterns
-# src/tools/ast_tools.py
-from __future__ import annotations
 import ast
-import os
-from typing import Dict, List, Set, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 
-class GraphFacts(dict):
-    pass
+@dataclass
+class GraphStructure:
+    stategraph_used: bool
+    add_edge_calls: int
+    add_conditional_edges_calls: int
+    start_fanout_edges: int
+    has_aggregator_node: bool
+    notes: str
 
 
-def _py_files_under(repo_path: str) -> List[str]:
-    out: List[str] = []
-    for root, _, files in os.walk(repo_path):
-        for fn in files:
-            if fn.endswith(".py"):
-                out.append(os.path.join(root, fn))
-    return out
+def _is_name(node: ast.AST, name: str) -> bool:
+    return isinstance(node, ast.Name) and node.id == name
 
 
-def analyze_graph_structure(repo_path: str) -> GraphFacts:
-    """
-    AST-based checks for:
-    - StateGraph instantiation
-    - add_node calls
-    - add_edge calls
-    - fan-out presence (one source -> many destinations)
-    - fan-in presence (many sources -> one destination)
-    - conditional edge presence (add_conditional_edges)
-    """
+def _get_call_attr_name(call: ast.Call) -> Optional[str]:
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    return None
+
+
+def analyze_graph_structure(graph_py_text: str) -> GraphStructure:
+    tree = ast.parse(graph_py_text)
+
     stategraph_used = False
-    add_node_calls: List[Tuple[str, int]] = []
-    add_edge_calls: List[Tuple[str, int, str, str]] = []  # (file, lineno, src, dst)
-    conditional_edges: List[Tuple[str, int]] = []
+    add_edge_calls = 0
+    add_conditional_edges_calls = 0
+    start_fanout_edges = 0
+    has_aggregator_node = False
 
-    for path in _py_files_under(repo_path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                tree = ast.parse(f.read(), filename=path)
-        except Exception:
-            continue
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            attr = _get_call_attr_name(node)
+            if attr == "StateGraph":
+                stategraph_used = True
+            if attr == "add_edge":
+                add_edge_calls += 1
+                # crude fan-out heuristic: edge from START constant/name
+                if len(node.args) >= 2 and _is_name(node.args[0], "START"):
+                    start_fanout_edges += 1
+            if attr == "add_conditional_edges":
+                add_conditional_edges_calls += 1
 
-        for node in ast.walk(tree):
-            # Detect StateGraph(...) call
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                if node.func.id == "StateGraph":
-                    stategraph_used = True
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if "EvidenceAggregator" in node.value or "evidence_aggregator" in node.value:
+                has_aggregator_node = True
 
-            # Detect builder.add_node(...)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                if node.func.attr == "add_node":
-                    add_node_calls.append((path, getattr(node, "lineno", -1)))
-                if node.func.attr == "add_edge":
-                    # Best-effort: edge args are usually (src, dst) or (START, "node")
-                    src = _const_str(node.args[0]) if len(node.args) > 0 else ""
-                    dst = _const_str(node.args[1]) if len(node.args) > 1 else ""
-                    add_edge_calls.append((path, getattr(node, "lineno", -1), src, dst))
-                if node.func.attr == "add_conditional_edges":
-                    conditional_edges.append((path, getattr(node, "lineno", -1)))
+    notes = (
+        f"stategraph_used={stategraph_used}, "
+        f"add_edge_calls={add_edge_calls}, "
+        f"add_conditional_edges_calls={add_conditional_edges_calls}, "
+        f"start_fanout_edges={start_fanout_edges}, "
+        f"has_aggregator_node={has_aggregator_node}"
+    )
 
-    # Fan-out and fan-in
-    out_map: Dict[str, Set[str]] = {}
-    in_map: Dict[str, Set[str]] = {}
-    for _, _, src, dst in add_edge_calls:
-        if not src or not dst:
-            continue
-        out_map.setdefault(src, set()).add(dst)
-        in_map.setdefault(dst, set()).add(src)
-
-    fan_out_nodes = sorted([s for s, ds in out_map.items() if len(ds) >= 2])
-    fan_in_nodes = sorted([d for d, ss in in_map.items() if len(ss) >= 2])
-
-    return GraphFacts(
+    return GraphStructure(
         stategraph_used=stategraph_used,
-        add_node_count=len(add_node_calls),
-        add_edge_count=len(add_edge_calls),
-        fan_out_detected=bool(fan_out_nodes),
-        fan_in_detected=bool(fan_in_nodes),
-        fan_out_sources=fan_out_nodes,
-        fan_in_targets=fan_in_nodes,
-        conditional_edges_detected=bool(conditional_edges),
-        samples={
-            "edge_calls": add_edge_calls[:20],
-            "conditional_edges": conditional_edges[:20],
-        },
+        add_edge_calls=add_edge_calls,
+        add_conditional_edges_calls=add_conditional_edges_calls,
+        start_fanout_edges=start_fanout_edges,
+        has_aggregator_node=has_aggregator_node,
+        notes=notes,
     )
 
 
-def _const_str(node: ast.AST) -> str:
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    if isinstance(node, ast.Name):
-        return node.id
-    return ""
+def find_pydantic_and_reducers(state_py_text: str) -> Dict[str, bool]:
+    tree = ast.parse(state_py_text)
+    found_basemodel = False
+    found_typeddict = False
+    found_operator_add = False
+    found_operator_ior = False
+    found_annotated = False
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "BaseModel":
+            found_basemodel = True
+        if isinstance(node, ast.Name) and node.id == "TypedDict":
+            found_typeddict = True
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "operator":
+            if node.attr == "add":
+                found_operator_add = True
+            if node.attr == "ior":
+                found_operator_ior = True
+        if isinstance(node, ast.Name) and node.id == "Annotated":
+            found_annotated = True
+
+    return {
+        "pydantic_basemodel": found_basemodel,
+        "typeddict": found_typeddict,
+        "annotated": found_annotated,
+        "operator_add": found_operator_add,
+        "operator_ior": found_operator_ior,
+    }
