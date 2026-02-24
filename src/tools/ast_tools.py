@@ -1,97 +1,144 @@
+from __future__ import annotations
+
 import ast
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import List, Optional
+
+from src.state import Evidence
 
 
-@dataclass
-class GraphStructure:
-    stategraph_used: bool
-    add_edge_calls: int
-    add_conditional_edges_calls: int
-    start_fanout_edges: int
-    has_aggregator_node: bool
-    notes: str
+def _read_text(path: Path) -> Optional[str]:
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="latin-1", errors="ignore")
+    except FileNotFoundError:
+        return None
 
 
-def _is_name(node: ast.AST, name: str) -> bool:
-    return isinstance(node, ast.Name) and node.id == name
+def _find_graph_file(repo_path: str) -> Optional[Path]:
+    root = Path(repo_path)
 
+    candidates = [
+        root / "src" / "graph.py",
+        root / "graph.py",
+        root / "app" / "graph.py",
+    ]
+    for c in candidates:
+        if c.exists() and c.is_file():
+            return c
 
-def _get_call_attr_name(call: ast.Call) -> Optional[str]:
-    if isinstance(call.func, ast.Attribute):
-        return call.func.attr
+    for p in root.rglob("graph.py"):
+        sp = str(p)
+        if "/.venv/" in sp or "/venv/" in sp or "__pycache__" in sp:
+            continue
+        return p
+
     return None
 
 
-def analyze_graph_structure(graph_py_text: str) -> GraphStructure:
-    tree = ast.parse(graph_py_text)
+def analyze_graph_structure(repo_path: str) -> List[Evidence]:
+    goal = "graph_orchestration"
 
-    stategraph_used = False
+    graph_file = _find_graph_file(repo_path)
+    if not graph_file:
+        return [
+            Evidence(
+                goal=goal,
+                found=False,
+                content=None,
+                location="repo",
+                rationale="No graph.py file found to inspect StateGraph wiring",
+                confidence=0.95,
+            )
+        ]
+
+    text = _read_text(graph_file)
+    if text is None:
+        return [
+            Evidence(
+                goal=goal,
+                found=False,
+                content=None,
+                location=str(graph_file),
+                rationale="graph.py exists but could not be read",
+                confidence=0.8,
+            )
+        ]
+
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as e:
+        return [
+            Evidence(
+                goal=goal,
+                found=False,
+                content=f"SyntaxError parsing {graph_file.name}: {e}",
+                location=str(graph_file),
+                rationale="Could not AST parse graph file",
+                confidence=0.9,
+            )
+        ]
+
+    stategraph_calls = 0
     add_edge_calls = 0
-    add_conditional_edges_calls = 0
-    start_fanout_edges = 0
-    has_aggregator_node = False
+    add_conditional_calls = 0
+    node_names = set()
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            attr = _get_call_attr_name(node)
-            if attr == "StateGraph":
-                stategraph_used = True
-            if attr == "add_edge":
+    class CallVisitor(ast.NodeVisitor):
+        def visit_Call(self, node: ast.Call):
+            nonlocal stategraph_calls, add_edge_calls, add_conditional_calls, node_names
+
+            fn_name = ""
+            if isinstance(node.func, ast.Name):
+                fn_name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                fn_name = node.func.attr
+
+            if fn_name == "StateGraph":
+                stategraph_calls += 1
+            if fn_name == "add_edge":
                 add_edge_calls += 1
-                # crude fan-out heuristic: edge from START constant/name
-                if len(node.args) >= 2 and _is_name(node.args[0], "START"):
-                    start_fanout_edges += 1
-            if attr == "add_conditional_edges":
-                add_conditional_edges_calls += 1
+            if fn_name == "add_conditional_edges":
+                add_conditional_calls += 1
+            if fn_name == "add_node" and node.args:
+                if isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                    node_names.add(node.args[0].value)
 
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if "EvidenceAggregator" in node.value or "evidence_aggregator" in node.value:
-                has_aggregator_node = True
+            self.generic_visit(node)
 
-    notes = (
-        f"stategraph_used={stategraph_used}, "
-        f"add_edge_calls={add_edge_calls}, "
-        f"add_conditional_edges_calls={add_conditional_edges_calls}, "
-        f"start_fanout_edges={start_fanout_edges}, "
-        f"has_aggregator_node={has_aggregator_node}"
-    )
+    CallVisitor().visit(tree)
 
-    return GraphStructure(
-        stategraph_used=stategraph_used,
-        add_edge_calls=add_edge_calls,
-        add_conditional_edges_calls=add_conditional_edges_calls,
-        start_fanout_edges=start_fanout_edges,
-        has_aggregator_node=has_aggregator_node,
-        notes=notes,
-    )
+    start_edge_targets = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "add_edge":
+            if len(n.args) >= 2:
+                a0, a1 = n.args[0], n.args[1]
+                if isinstance(a0, ast.Name) and a0.id == "START":
+                    if isinstance(a1, ast.Constant) and isinstance(a1.value, str):
+                        start_edge_targets.append(a1.value)
 
+    parallel_hint = len(set(start_edge_targets)) >= 2
 
-def find_pydantic_and_reducers(state_py_text: str) -> Dict[str, bool]:
-    tree = ast.parse(state_py_text)
-    found_basemodel = False
-    found_typeddict = False
-    found_operator_add = False
-    found_operator_ior = False
-    found_annotated = False
+    content_lines = [
+        f"graph_file={graph_file}",
+        f"StateGraph_calls={stategraph_calls}",
+        f"add_edge_calls={add_edge_calls}",
+        f"add_conditional_edges_calls={add_conditional_calls}",
+        f"add_node_names={sorted(list(node_names))[:50]}",
+        f"START_targets={sorted(list(set(start_edge_targets)))}",
+        f"parallel_hint={parallel_hint}",
+    ]
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and node.id == "BaseModel":
-            found_basemodel = True
-        if isinstance(node, ast.Name) and node.id == "TypedDict":
-            found_typeddict = True
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "operator":
-            if node.attr == "add":
-                found_operator_add = True
-            if node.attr == "ior":
-                found_operator_ior = True
-        if isinstance(node, ast.Name) and node.id == "Annotated":
-            found_annotated = True
+    found = stategraph_calls > 0 and add_edge_calls > 0
 
-    return {
-        "pydantic_basemodel": found_basemodel,
-        "typeddict": found_typeddict,
-        "annotated": found_annotated,
-        "operator_add": found_operator_add,
-        "operator_ior": found_operator_ior,
-    }
+    return [
+        Evidence(
+            goal=goal,
+            found=found,
+            content="\n".join(content_lines),
+            location=str(graph_file),
+            rationale="AST inspection of graph wiring and parallel fan-out signal",
+            confidence=0.9 if found else 0.75,
+        )
+    ]

@@ -1,31 +1,39 @@
-from dataclasses import dataclass
+from __future__ import annotations
+
 from typing import List
 
 from pypdf import PdfReader
 
-
-@dataclass
-class ExtractedImage:
-    page_index: int
-    name: str
+from src.state import Evidence
 
 
-def extract_images_from_pdf(pdf_path: str) -> List[ExtractedImage]:
+def analyze_pdf_diagrams_safe(pdf_path: str) -> List[Evidence]:
     """
-    Best-effort image discovery.
-    pypdf image extraction varies across PDFs.
-    For grading, implementation is required, execution optional.
+    Safe default.
+    Extracts page count. Does not call any vision model.
+    You can replace later with real image extraction + multimodal LLM.
     """
-    images: List[ExtractedImage] = []
-    reader = PdfReader(pdf_path)
-    for i, page in enumerate(reader.pages):
-        try:
-            # Some PDFs expose images via page.images
-            page_images = getattr(page, "images", None)
-            if not page_images:
-                continue
-            for img in page_images:
-                images.append(ExtractedImage(page_index=i, name=getattr(img, "name", "img")))
-        except Exception:
-            continue
-    return images
+    try:
+        r = PdfReader(pdf_path)
+        n_pages = len(r.pages)
+        return [
+            Evidence(
+                goal="swarm_visual",
+                found=False,
+                content=f"Vision enabled, but not implemented. pdf_pages={n_pages}",
+                location="pdf_images",
+                rationale="Vision stub. No image extraction yet.",
+                confidence=1.0,
+            )
+        ]
+    except Exception as e:
+        return [
+            Evidence(
+                goal="swarm_visual",
+                found=False,
+                content=f"Vision stub failed: {e}",
+                location="pdf_images",
+                rationale="Could not read PDF for page count",
+                confidence=0.8,
+            )
+        ]

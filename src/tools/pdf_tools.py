@@ -1,98 +1,61 @@
+from __future__ import annotations
+
 import re
-from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import List
 
 from pypdf import PdfReader
 
-
-@dataclass
-class PdfIngest:
-    full_text: str
-    chunks: List[str]
-    keyword_hits: Dict[str, List[str]]
-    mentioned_paths: List[str]
+from src.state import Evidence
 
 
-def extract_text(pdf_path: str) -> str:
+def ingest_pdf_chunks(pdf_path: str, max_chars: int = 2500) -> List[str]:
     reader = PdfReader(pdf_path)
-    texts: List[str] = []
-    for page in reader.pages:
-        try:
-            t = page.extract_text() or ""
-        except Exception:
-            t = ""
-        if t:
-            texts.append(t)
-    return "\n".join(texts)
+    full: List[str] = []
+    for p in reader.pages:
+        txt = p.extract_text() or ""
+        full.append(txt)
+    text = "\n".join(full)
 
-
-def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 150) -> List[str]:
-    if not text.strip():
-        return []
     chunks: List[str] = []
     i = 0
     while i < len(text):
-        end = min(len(text), i + chunk_size)
-        chunks.append(text[i:end])
-        i = end - overlap
-        if i < 0:
-            i = 0
-        if end == len(text):
-            break
+        chunks.append(text[i : i + max_chars])
+        i += max_chars
     return chunks
 
 
-def find_keywords(text: str, keywords: List[str]) -> Dict[str, List[str]]:
-    hits: Dict[str, List[str]] = {k: [] for k in keywords}
-    lower = text.lower()
+def extract_keyword_evidence(chunks: List[str], keywords: List[str], goal: str) -> List[Evidence]:
+    joined = "\n".join(chunks)
+    low = joined.lower()
+
+    hits: List[str] = []
     for k in keywords:
-        kl = k.lower()
-        idx = 0
-        while True:
-            j = lower.find(kl, idx)
-            if j == -1:
-                break
-            start = max(0, j - 80)
-            end = min(len(text), j + len(k) + 80)
-            snippet = text[start:end].replace("\n", " ").strip()
-            hits[k].append(snippet)
-            idx = j + len(kl)
-    return hits
+        if k.lower() in low:
+            hits.append(k)
+
+    return [
+        Evidence(
+            goal=goal,
+            found=bool(hits),
+            content=("Keywords found: " + ", ".join(hits)) if hits else None,
+            location="pdf",
+            rationale="Keyword scan over extracted PDF text",
+            confidence=0.7 if hits else 0.6,
+        )
+    ]
 
 
-_PATH_RE = re.compile(r"\b[a-zA-Z0-9_\-]+(?:/[a-zA-Z0-9_\-\.]+)+\.(?:py|ts|md|json|yaml|yml)\b")
+def extract_report_paths_evidence(chunks: List[str], goal: str) -> List[Evidence]:
+    joined = "\n".join(chunks)
+    paths = sorted(set(re.findall(r"\b(?:src|rubric|audit|reports)/[A-Za-z0-9_./-]+\b", joined)))
 
-
-def extract_file_paths(text: str) -> List[str]:
-    paths = _PATH_RE.findall(text or "")
-    # normalize duplicates
-    seen = set()
-    out: List[str] = []
-    for p in paths:
-        if p not in seen:
-            seen.add(p)
-            out.append(p)
-    return out
-
-
-def ingest_pdf(pdf_path: str) -> PdfIngest:
-    text = extract_text(pdf_path)
-    chunks = chunk_text(text)
-    keywords = ["Dialectical Synthesis", "Fan-In", "Fan-Out", "Metacognition", "State Synchronization"]
-    hits = find_keywords(text, keywords)
-    mentioned = extract_file_paths(text)
-    return PdfIngest(full_text=text, chunks=chunks, keyword_hits=hits, mentioned_paths=mentioned)
-
-
-def cross_reference_paths(mentioned_paths: List[str], repo_files: List[str]) -> Tuple[List[str], List[str]]:
-    repo_set = set(repo_files)
-    verified: List[str] = []
-    hallucinated: List[str] = []
-    for p in mentioned_paths:
-        # allow both with and without leading ./ or root folder
-        p2 = p.lstrip("./")
-        if p2 in repo_set:
-            verified.append(p)
-        else:
-            hallucinated.append(p)
-    return verified, hallucinated
+    return [
+        Evidence(
+            goal=goal,
+            found=bool(paths),
+            content="\n".join(paths[:200]) if paths else None,
+            location="pdf",
+            rationale="Regex extraction of repo-like paths from PDF text",
+            confidence=0.65 if paths else 0.55,
+        )
+    ]
