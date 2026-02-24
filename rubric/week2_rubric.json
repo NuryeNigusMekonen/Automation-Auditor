@@ -1,0 +1,197 @@
+{
+  "rubric_metadata": {
+    "rubric_name": "Week 2: The Automaton Auditor Self-Evaluation",
+    "grading_target": "Week 2 Auditor Repository & Architectural Report",
+    "version": "2.0.0"
+  },
+  "dimensions": [
+    {
+      "id": "forensic_accuracy_code",
+      "name": "Forensic Accuracy (Codebase)",
+      "target_artifact": "github_repo",
+      "forensic_instruction": [
+        {
+          "evidence_class": "Git Forensic Analysis",
+          "commands": ["git log --oneline --reverse"],
+          "success_pattern": ">3 commits. Progression: Environment Setup -> Tool Engineering -> Graph Orchestration.",
+          "failure_pattern": "Single \"init\" commit or \"bulk upload\" of code.",
+          "capture": "List of commit messages and timestamps."
+        },
+        {
+          "evidence_class": "State Management Rigor",
+          "file_check": ["src/state.py", "src/graph.py"],
+          "ast_checks": [
+            "Look for Pydantic BaseModel subclasses",
+            "Look for TypedDict usage",
+            "Confirm AgentState maintains a collection of Evidence and a list of JudicialOpinion objects"
+          ],
+          "capture": "Code snippet of the core AgentState definition."
+        },
+        {
+          "evidence_class": "Graph Orchestration",
+          "ast_checks": [
+            "Detect StateGraph builder instantiation",
+            "Analyze add_node/add_edge wiring",
+            "Verify fan-out for Detectives and Judges",
+            "Verify fan-in synchronization node before Judges"
+          ],
+          "capture": "Python block defining graph nodes and edges."
+        },
+        {
+          "evidence_class": "Safe Tool Engineering",
+          "file_check": ["src/tools/"],
+          "checks": [
+            "Verify git clone uses tempfile.TemporaryDirectory() or equivalent sandboxing",
+            "Flag raw os.system calls without sanitization or error handling"
+          ],
+          "capture": "Python function responsible for repository clone."
+        },
+        {
+          "evidence_class": "Structured Output",
+          "file_check": ["src/nodes/judges.py", "src/nodes/"],
+          "checks": [
+            "Verify judge LLM calls use with_structured_output() or bind_tools() bound to JudicialOpinion schema",
+            "Verify parsing and retry behavior exists when outputs are invalid"
+          ],
+          "capture": "Code block responsible for querying judge LLMs."
+        }
+      ],
+      "judicial_logic": {
+        "prosecutor": [
+          "If tool execution relies on raw os.system without error handling or sandboxing, charge 'Security Negligence'.",
+          "If Pydantic is missing entirely for Evidence/JudicialOpinion/state, score max 2."
+        ],
+        "defense": [
+          "Credit creative and robust AST parsing that verifies graph wiring beyond regex.",
+          "Credit thoughtful engineering process shown in commit progression."
+        ],
+        "tech_lead": [
+          "Check state reducers. Verify operator.add or operator.ior (or equivalent) prevents data loss in parallel execution.",
+          "Assess maintainability of tool modules and separation of concerns."
+        ]
+      }
+    },
+    {
+      "id": "forensic_accuracy_docs",
+      "name": "Forensic Accuracy (Documentation)",
+      "target_artifact": "pdf_report",
+      "forensic_instruction": [
+        {
+          "evidence_class": "Theoretical Depth",
+          "keyword_search": [
+            "Dialectical Synthesis",
+            "Fan-In",
+            "Fan-Out",
+            "Metacognition",
+            "State Synchronization"
+          ],
+          "context_check": "Confirm terms appear inside real architectural explanation, not as buzzwords.",
+          "capture": "Specific sentences explaining these concepts."
+        },
+        {
+          "evidence_class": "Host Analysis Accuracy",
+          "cross_reference": [
+            "Extract file paths mentioned in the report",
+            "Verify existence against RepoInvestigator findings"
+          ],
+          "capture": "List of verified paths vs hallucinated paths."
+        }
+      ],
+      "judicial_logic": {
+        "prosecutor": [
+          "If the report claims features that are not present in the code, charge 'Auditor Hallucination'. Score 1."
+        ],
+        "defense": [
+          "Credit deep, concrete explanations of multi-agent dialectics and evaluation design, even if implementation has gaps."
+        ],
+        "tech_lead": [
+          "Judge whether the report is reproducible. A third party should be able to recreate the system from it."
+        ]
+      }
+    },
+    {
+      "id": "judicial_nuance",
+      "name": "Judicial Nuance & Dialectics",
+      "target_artifact": "github_repo",
+      "forensic_instruction": [
+        {
+          "evidence_class": "Persona Separation",
+          "file_check": ["src/nodes/judges.py", "src/nodes/", "src/prompts/"],
+          "checks": [
+            "Verify Prosecutor, Defense, and TechLead have distinct system prompts and behaviors",
+            "Verify prompts produce conflicting viewpoints when evidence is ambiguous"
+          ],
+          "capture": "Prompt templates or code defining persona prompts."
+        },
+        {
+          "evidence_class": "Structured Judging",
+          "checks": [
+            "Verify judges return structured JSON with score, reasoning, citations",
+            "Verify retry on parser failure"
+          ],
+          "capture": "Structured output binding code and parser/retry logic."
+        }
+      ],
+      "judicial_logic": {
+        "prosecutor": [
+          "If the three judges share ~90% of the same prompt text, charge 'Persona Collusion'. Score max 2.",
+          "If outputs are free text and not schema-validated, charge 'Hallucination Liability'."
+        ],
+        "defense": [
+          "Credit explicit contrarian instructions for Prosecutor and forgiving instructions for Defense.",
+          "Credit clear mapping from evidence to score, even if imperfect."
+        ],
+        "tech_lead": [
+          "Verify each opinion references criterion_id and cites evidence keys.",
+          "Confirm structured output is enforced consistently."
+        ]
+      }
+    },
+    {
+      "id": "langgraph_architecture",
+      "name": "LangGraph Orchestration Rigor",
+      "target_artifact": "github_repo",
+      "forensic_instruction": [
+        {
+          "evidence_class": "Parallel Branching",
+          "checks": [
+            "Verify Detectives run via fan-out parallel branches",
+            "Verify EvidenceAggregator fan-in synchronization exists before Judges",
+            "Verify Judges run via fan-out parallel branches"
+          ],
+          "capture": "Graph wiring snippet showing nodes and edges."
+        },
+        {
+          "evidence_class": "Conditional Handling",
+          "checks": [
+            "Check for conditional edges handling missing evidence or node failure",
+            "Check for retries or graceful degradation when optional vision is disabled"
+          ],
+          "capture": "Conditional edge code blocks and fallback logic."
+        }
+      ],
+      "judicial_logic": {
+        "prosecutor": [
+          "If the graph is purely linear (A->B->C) with no fan-out/fan-in, charge 'Orchestration Fraud'. Score 1."
+        ],
+        "defense": [
+          "Credit simpler graphs if typed state validation is strong and transitions are robust."
+        ],
+        "tech_lead": [
+          "Verify fan-in correctly aggregates evidence before judges run.",
+          "Assess whether the graph structure is maintainable and extensible."
+        ]
+      }
+    }
+  ],
+  "synthesis_rules": {
+    "security_override": "Confirmed security flaws (e.g., shell injection in git tools) cap total score at 3.",
+    "fact_supremacy": "Forensic evidence (facts) always overrules Judicial opinion (interpretation).",
+    "dissent_requirement": "The Chief Justice must summarize why the Prosecutor and Defense disagreed in the final report."
+  },
+  "scoring_scale": {
+    "1": "Severe architectural failure or missing core requirements.",
+    "3": "Functionally executes but structurally weak or incomplete; technical debt present.",
+    "5": "Robust, typed, parallel, secure, production-grade implementation."
+  }
+}

@@ -1,0 +1,6 @@
+.env
+.venv
+pycache/
+*.pyc
+audit/report_onpeer_generated/
+uv.lock
