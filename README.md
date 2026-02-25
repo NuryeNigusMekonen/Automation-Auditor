@@ -146,6 +146,14 @@ pip install -r requirements.txt
 
 Create .env file in project root:
 
+Copy .env.example to .env
+
+Fill OPENAI_API_KEY
+
+Optional: set OPENAI_MODEL
+
+Do not commit .env.
+
 OPENAI_API_KEY=your_key_here
 
 ---
@@ -163,6 +171,7 @@ python -m src.run --repo [https://github.com/user/project](https://github.com/us
 Generated audit report:
 
 audit/report_onpeer_generated/
+
 
 ---
 
