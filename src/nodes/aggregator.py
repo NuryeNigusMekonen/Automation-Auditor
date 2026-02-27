@@ -119,6 +119,38 @@ def _collect_security_hit_locations(evs: List[Evidence]) -> Tuple[List[str], Lis
     return hit_locs, hit_snips
 
 
+def _build_cross_detective_consistency(
+    evidences: Dict[str, List[Evidence]],
+) -> Evidence:
+    git_evs = evidences.get("git_forensic_analysis", []) or []
+    graph_evs = evidences.get("graph_orchestration", []) or []
+    report_acc_evs = evidences.get("report_accuracy", []) or []
+
+    git_positive = any(e.found is True for e in git_evs)
+    graph_positive = any(e.found is True for e in graph_evs)
+    report_has_hallucinations = any(e.found is False for e in report_acc_evs)
+
+    lines = [
+        f"git_positive={str(git_positive).lower()}",
+        f"graph_positive={str(graph_positive).lower()}",
+        f"report_hallucinations={str(report_has_hallucinations).lower()}",
+    ]
+
+    if git_positive and graph_positive:
+        lines.append("link: git evolution evidence aligns with graph orchestration evidence")
+    if report_has_hallucinations:
+        lines.append("link: report claims include unverifiable or missing paths")
+
+    return Evidence(
+        goal="cross_detective_consistency",
+        found=not report_has_hallucinations,
+        content="\n".join(lines),
+        location="src/nodes/aggregator.py",
+        rationale="Cross-links repository forensics, graph structure findings, and report-accuracy signals",
+        confidence=0.85 if report_has_hallucinations else 0.9,
+    )
+
+
 def evidence_aggregator(state: AgentState) -> Dict:
     evidences = state.get("evidences", {}) or {}
     cap_locations = _runtime_cap(state, "cap_locations", CAP_LOCATIONS)
@@ -246,12 +278,14 @@ def evidence_aggregator(state: AgentState) -> Dict:
         rationale="Verified evidence locations for judge citation allowlist",
         confidence=0.9,
     )
+    cross_detective_consistency = _build_cross_detective_consistency(evidences)
 
     patch: Dict = {
         "evidences": {
             # Do not emit orchestration_guard here; the routing guard node owns it.
             "security_override_signal": [security_signal],
             "citation_pool": [citation_evidence],
+            "cross_detective_consistency": [cross_detective_consistency],
         }
     }
     if crossref_evs:

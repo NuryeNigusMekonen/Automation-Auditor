@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 
 from langchain_openai import ChatOpenAI
 
@@ -143,14 +143,44 @@ def _has_confirmed_security_signal(evidence: List[Evidence]) -> bool:
     return False
 
 
+def _structured_output_telemetry(
+    role: str,
+    criterion_id: str,
+    retries: int,
+    fallback_used: bool,
+    last_err: str,
+    offline_mode: bool,
+) -> Evidence:
+    status = "offline" if offline_mode else ("fallback" if fallback_used else "ok")
+    parts = [
+        f"judge={role}",
+        f"criterion_id={criterion_id}",
+        f"status={status}",
+        f"retries={retries}",
+        f"fallback_used={str(fallback_used).lower()}",
+    ]
+    if last_err:
+        parts.append(f"last_error={last_err}")
+
+    return Evidence(
+        goal="structured_output_enforcement",
+        found=not fallback_used,
+        content="; ".join(parts),
+        location="src/nodes/judges.py",
+        rationale="Judge structured-output runtime telemetry for retry/fallback handling",
+        confidence=0.95 if not fallback_used else 0.85,
+    )
+
+
 def _run_judge(
     state: AgentState,
     role: str,
     philosophy: str,
     behavioral_contract: str,
-) -> List[JudicialOpinion]:
+) -> Tuple[List[JudicialOpinion], List[Evidence]]:
     offline_mode = bool(state.get("offline_mode", False))
     outputs: List[JudicialOpinion] = []
+    telemetry: List[Evidence] = []
 
     for dim in state["rubric_dimensions"]:
         cid = str(dim.get("id", ""))
@@ -167,6 +197,10 @@ def _run_judge(
         security_confirmed = _has_confirmed_security_signal(evidence)
 
         op: JudicialOpinion
+        last_err = ""
+        retries = 0
+        fallback_used = False
+
         if offline_mode:
             op = _offline_judicial_opinion(role, cid, evidence, allowed)
         else:
@@ -201,13 +235,13 @@ def _run_judge(
                 f"{json.dumps([e.model_dump() for e in evidence[:cap_evidence_items]], indent=2)}\n"
             )
 
-            last_err: str = ""
             for attempt in range(3):
                 try:
                     op = llm.invoke(prompt)
                     break
                 except Exception as e:
                     last_err = f"{type(e).__name__}: {e}"
+                    retries = attempt + 1
                     if attempt < 2:
                         prompt = (
                             prompt
@@ -222,6 +256,7 @@ def _run_judge(
                         argument=f"risk: structured output failure. detail={last_err}",
                         cited_evidence=[],
                     )
+                    fallback_used = True
 
         op.judge = role
         op.criterion_id = cid
@@ -276,38 +311,54 @@ def _run_judge(
             )
 
         outputs.append(op)
+        telemetry.append(
+            _structured_output_telemetry(
+                role=role,
+                criterion_id=cid,
+                retries=retries,
+                fallback_used=fallback_used,
+                last_err=last_err,
+                offline_mode=offline_mode,
+            )
+        )
 
-    return outputs
+    return outputs, telemetry
 
 
 def prosecutor(state: AgentState) -> Dict:
+    opinions, telemetry = _run_judge(
+        state,
+        role="Prosecutor",
+        philosophy="Assume non-compliance unless proven. Search for risk, vulnerability, architectural weakness, and missing artifacts.",
+        behavioral_contract="Your argument contains the word risk. Penalize ambiguity. If deterministic logic is not visible in evidence, treat it as absent.",
+    )
     return {
-        "opinions": _run_judge(
-            state,
-            role="Prosecutor",
-            philosophy="Assume non-compliance unless proven. Search for risk, vulnerability, architectural weakness, and missing artifacts.",
-            behavioral_contract="Your argument contains the word risk. Penalize ambiguity. If deterministic logic is not visible in evidence, treat it as absent.",
-        )
+        "opinions": opinions,
+        "evidences": {"structured_output_enforcement": telemetry},
     }
 
 
 def defense(state: AgentState) -> Dict:
+    opinions, telemetry = _run_judge(
+        state,
+        role="Defense",
+        philosophy="Assume good intent. Reward effort when supported by evidence. Partial compliance gets proportional credit.",
+        behavioral_contract="Your argument contains the word effort. Acknowledge incremental improvement. Interpret evidence in the developer favor when reasonable.",
+    )
     return {
-        "opinions": _run_judge(
-            state,
-            role="Defense",
-            philosophy="Assume good intent. Reward effort when supported by evidence. Partial compliance gets proportional credit.",
-            behavioral_contract="Your argument contains the word effort. Acknowledge incremental improvement. Interpret evidence in the developer favor when reasonable.",
-        )
+        "opinions": opinions,
+        "evidences": {"structured_output_enforcement": telemetry},
     }
 
 
 def tech_lead(state: AgentState) -> Dict:
+    opinions, telemetry = _run_judge(
+        state,
+        role="TechLead",
+        philosophy="Evaluate production readiness. Focus on maintainability, correctness, and operational safety.",
+        behavioral_contract="Your argument contains the word maintainability. Ignore academic language without implementation proof. If confirmed security flaw exists, keep score at 3 or lower.",
+    )
     return {
-        "opinions": _run_judge(
-            state,
-            role="TechLead",
-            philosophy="Evaluate production readiness. Focus on maintainability, correctness, and operational safety.",
-            behavioral_contract="Your argument contains the word maintainability. Ignore academic language without implementation proof. If confirmed security flaw exists, keep score at 3 or lower.",
-        )
+        "opinions": opinions,
+        "evidences": {"structured_output_enforcement": telemetry},
     }
