@@ -1,8 +1,28 @@
 from __future__ import annotations
 
+import os
 from typing import Dict, List, Set, Tuple
 
 from src.state import AgentState, Evidence
+
+
+def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int = 20000) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(min_value, min(value, max_value))
+
+
+CAP_LOCATIONS = _env_int("AUDITOR_CAP_LOCATIONS", 50, max_value=2000)
+CAP_REPORT_PATHS = _env_int("AUDITOR_CAP_REPORT_PATHS", 2000, max_value=50000)
+CAP_CROSSREF_PER_TYPE = _env_int("AUDITOR_CAP_CROSSREF_PER_TYPE", 200, max_value=5000)
+CAP_SECURITY_LOCATIONS = _env_int("AUDITOR_CAP_SECURITY_LOCATIONS", 50, max_value=2000)
+CAP_SECURITY_SNIPPETS = _env_int("AUDITOR_CAP_SECURITY_SNIPPETS", 50, max_value=2000)
+CAP_SECURITY_SIGNAL_SNIPPETS = _env_int("AUDITOR_CAP_SECURITY_SIGNAL_SNIPPETS", 25, max_value=500)
 
 
 def _flatten_locations(evs: List[Evidence]) -> List[str]:
@@ -22,7 +42,7 @@ def _flatten_locations(evs: List[Evidence]) -> List[str]:
         seen.add(x)
         uniq.append(x)
 
-    return uniq[:50]
+    return uniq[:CAP_LOCATIONS]
 
 
 def _collect_report_paths(all_evs: List[Evidence]) -> List[str]:
@@ -45,7 +65,7 @@ def _collect_report_paths(all_evs: List[Evidence]) -> List[str]:
         seen.add(p)
         uniq.append(p)
 
-    return sorted(uniq)[:2000]
+    return sorted(uniq)[:CAP_REPORT_PATHS]
 
 
 def _collect_security_hit_locations(evs: List[Evidence]) -> Tuple[List[str], List[str]]:
@@ -85,8 +105,8 @@ def _collect_security_hit_locations(evs: List[Evidence]) -> Tuple[List[str], Lis
             if loc:
                 hit_locs.append(loc)
 
-    hit_locs = sorted(set(hit_locs))[:50]
-    hit_snips = sorted(set(hit_snips))[:50]
+    hit_locs = sorted(set(hit_locs))[:CAP_SECURITY_LOCATIONS]
+    hit_snips = sorted(set(hit_snips))[:CAP_SECURITY_SNIPPETS]
     return hit_locs, hit_snips
 
 
@@ -128,10 +148,10 @@ def evidence_aggregator(state: AgentState) -> Dict:
                 found=True,
                 content="\n".join(
                     ["Verified paths:"]
-                    + verified_sorted[:200]
+                    + verified_sorted[:CAP_CROSSREF_PER_TYPE]
                     + [""]
                     + ["Hallucinated paths:"]
-                    + hallucinated_sorted[:200]
+                    + hallucinated_sorted[:CAP_CROSSREF_PER_TYPE]
                 ),
                 location="src/nodes/aggregator.py",
                 rationale="Cross-referenced PDF paths against repository file index",
@@ -139,7 +159,7 @@ def evidence_aggregator(state: AgentState) -> Dict:
             )
         )
 
-        for p in verified_sorted[:200]:
+        for p in verified_sorted[:CAP_CROSSREF_PER_TYPE]:
             crossref_evs.append(
                 Evidence(
                     goal="report_accuracy",
@@ -151,7 +171,7 @@ def evidence_aggregator(state: AgentState) -> Dict:
                 )
             )
 
-        for p in hallucinated_sorted[:200]:
+        for p in hallucinated_sorted[:CAP_CROSSREF_PER_TYPE]:
             crossref_evs.append(
                 Evidence(
                     goal="report_accuracy",
@@ -171,7 +191,7 @@ def evidence_aggregator(state: AgentState) -> Dict:
         goal="security_override_signal",
         found=has_hits,
         content=(
-            "Unsafe execution detected:\n" + "\n".join(hit_snips[:25])
+            "Unsafe execution detected:\n" + "\n".join(hit_snips[:CAP_SECURITY_SIGNAL_SNIPPETS])
             if hit_snips
             else (
                 "Unsafe execution detected."

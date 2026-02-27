@@ -135,26 +135,32 @@ This ensures architectural rigor and prevents linear single-prompt grading.
 
 ## Installation
 
-Create virtual environment:
+Recommended workflow (uv):
 
-python3 -m venv .venv
+```bash
+uv sync
 source .venv/bin/activate
+```
 
-Install dependencies:
+Create `.env` in project root:
 
-pip install -r requirements.txt
+```bash
+cp .env.example .env
+```
 
-Create .env file in project root:
+Set required key:
 
-Copy .env.example to .env
-
-Fill OPENAI_API_KEY
-
-Optional: set OPENAI_MODEL
-
-Do not commit .env.
-
+```bash
 OPENAI_API_KEY=your_key_here
+```
+
+Optional:
+
+```bash
+OPENAI_MODEL=gpt-4o-mini
+```
+
+Do not commit `.env`.
 
 ---
 
@@ -162,15 +168,34 @@ OPENAI_API_KEY=your_key_here
 
 Run the auditor:
 
-python -m src.run --repo <github_repo_url> --pdf <path_to_pdf>
+```bash
+uv run python -m src.run \
+  --repo <github_repo_url> \
+  --pdf <path_to_pdf> \
+  --out <output_markdown_path>
+```
 
 Example:
 
-python -m src.run --repo [https://github.com/user/project](https://github.com/user/project) --pdf ./report.pdf
+```bash
+uv run python -m src.run \
+  --repo https://github.com/user/project \
+  --pdf ./reports/week2_takeaway.pdf \
+  --out ./audit/report_onpeer_generated/peer_audit.md \
+  --rubric ./rubric/week2_rubric.json \
+  --enable-vision
+```
 
 Generated audit report:
 
-audit/report_onpeer_generated/
+`audit/report_onpeer_generated/`
+
+Convenience targets:
+
+```bash
+make self_audit
+make peer_audit
+```
 
 
 ---

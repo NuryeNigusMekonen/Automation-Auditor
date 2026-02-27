@@ -9,6 +9,22 @@ from langchain_openai import ChatOpenAI
 from src.state import AgentState, Evidence, JudicialOpinion
 
 
+def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int = 10000) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(min_value, min(value, max_value))
+
+
+CAP_ALLOWED_CITATIONS = _env_int("AUDITOR_CAP_ALLOWED_CITATIONS", 50, max_value=2000)
+CAP_CITED_EVIDENCE = _env_int("AUDITOR_CAP_CITED_EVIDENCE", 12, max_value=200)
+CAP_EVIDENCE_ITEMS = _env_int("AUDITOR_CAP_EVIDENCE_ITEMS", 80, max_value=5000)
+
+
 def _judge_llm() -> ChatOpenAI:
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     return ChatOpenAI(model=model, temperature=0)
@@ -60,7 +76,7 @@ def _collect_allowed(
         seen.add(x)
         uniq.append(x)
 
-    return uniq[:50]
+    return uniq[:CAP_ALLOWED_CITATIONS]
 
 
 def _sanitize_citations(cited: List[str], allowed: List[str]) -> List[str]:
@@ -68,7 +84,7 @@ def _sanitize_citations(cited: List[str], allowed: List[str]) -> List[str]:
         return []
     allowed_set = set(allowed)
     kept = [c for c in (cited or []) if c in allowed_set]
-    return kept[:12]
+    return kept[:CAP_CITED_EVIDENCE]
 
 
 def _has_confirmed_security_signal(evidence: List[Evidence]) -> bool:
@@ -126,7 +142,7 @@ def _run_judge(
             "Allowed citations:\n"
             f"{json.dumps(allowed, indent=2)}\n\n"
             "Evidence JSON:\n"
-            f"{json.dumps([e.model_dump() for e in evidence], indent=2)}\n"
+            f"{json.dumps([e.model_dump() for e in evidence[:CAP_EVIDENCE_ITEMS]], indent=2)}\n"
         )
 
         op: JudicialOpinion
