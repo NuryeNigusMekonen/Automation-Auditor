@@ -31,3 +31,9 @@ jobs:
 
       - name: CLI smoke
         run: uv run python -m src.run --help
+
+      - name: Docker build
+        run: docker build -t automation-auditor:ci .
+
+      - name: Docker run smoke
+        run: docker run --rm automation-auditor:ci --help

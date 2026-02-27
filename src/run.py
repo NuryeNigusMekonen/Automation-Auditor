@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import tempfile
+import warnings
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -13,6 +14,16 @@ from src.graph import build_graph
 
 def main() -> None:
     load_dotenv()
+    warnings.filterwarnings(
+        "ignore",
+        message=r"Pydantic serializer warnings:.*field_name='parsed'.*",
+        category=UserWarning,
+    )
+    warnings.filterwarnings(
+        "ignore",
+        category=UserWarning,
+        module=r"pydantic\.main",
+    )
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True)
