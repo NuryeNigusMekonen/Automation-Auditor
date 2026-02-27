@@ -7,16 +7,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from src.config import RuntimeConfig, load_rubric_dimensions
 from src.graph import build_graph
-
-
-def load_rubric_dimensions(path: str) -> list[dict]:
-    with open(path, "r", encoding="utf-8") as f:
-        obj = json.load(f)
-    dims = obj.get("dimensions", [])
-    if not isinstance(dims, list):
-        raise ValueError("rubric.dimensions must be a list")
-    return dims
 
 
 def main() -> None:
@@ -31,6 +23,7 @@ def main() -> None:
     # Enhanced argument parsing for vision flags
     ap.add_argument("--enable-vision", action="store_true", help="Enable PDF diagram inspection")
     ap.add_argument("--disable-vision", action="store_true", help="Disable PDF diagram inspection")
+    ap.add_argument("--offline", action="store_true", help="Disable LLM calls and run deterministic offline judge mode")
     args = ap.parse_args()
 
     if args.enable_vision and args.disable_vision:
@@ -39,6 +32,11 @@ def main() -> None:
     enable_vision = True if args.enable_vision else False
     if args.disable_vision:
         enable_vision = False
+
+    runtime_config = RuntimeConfig.from_sources(
+        enable_vision=enable_vision,
+        offline_mode=bool(args.offline),
+    )
 
     rubric_dimensions = load_rubric_dimensions(args.rubric)
 
@@ -50,7 +48,9 @@ def main() -> None:
             "repo_url": args.repo,
             "pdf_path": args.pdf,
             "rubric_dimensions": rubric_dimensions,
-            "enable_vision": enable_vision,
+            "enable_vision": runtime_config.enable_vision,
+            "offline_mode": runtime_config.offline_mode,
+            "runtime_config": runtime_config.model_dump(),
             "workspace_dir": workdir,
             "evidences": {},
             "opinions": [],

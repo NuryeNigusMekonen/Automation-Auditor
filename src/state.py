@@ -46,6 +46,8 @@ class AgentState(TypedDict):
     pdf_path: str
     rubric_dimensions: List[Dict]
     enable_vision: bool
+    offline_mode: bool
+    runtime_config: Dict
     workspace_dir: str
 
     evidences: Annotated[Dict[str, List[Evidence]], merge_evidence_dicts]

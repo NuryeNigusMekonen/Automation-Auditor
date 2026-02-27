@@ -25,6 +25,15 @@ CAP_SECURITY_SNIPPETS = _env_int("AUDITOR_CAP_SECURITY_SNIPPETS", 50, max_value=
 CAP_SECURITY_SIGNAL_SNIPPETS = _env_int("AUDITOR_CAP_SECURITY_SIGNAL_SNIPPETS", 25, max_value=500)
 
 
+def _runtime_cap(state: AgentState, key: str, default: int) -> int:
+    cfg = state.get("runtime_config") or {}
+    if isinstance(cfg, dict):
+        value = cfg.get(key)
+        if isinstance(value, int) and value > 0:
+            return value
+    return default
+
+
 def _flatten_locations(evs: List[Evidence]) -> List[str]:
     out: List[str] = []
     for e in evs or []:
@@ -112,6 +121,28 @@ def _collect_security_hit_locations(evs: List[Evidence]) -> Tuple[List[str], Lis
 
 def evidence_aggregator(state: AgentState) -> Dict:
     evidences = state.get("evidences", {}) or {}
+    cap_locations = _runtime_cap(state, "cap_locations", CAP_LOCATIONS)
+    cap_report_paths = _runtime_cap(state, "cap_report_paths", CAP_REPORT_PATHS)
+    cap_crossref_per_type = _runtime_cap(
+        state,
+        "cap_crossref_per_type",
+        CAP_CROSSREF_PER_TYPE,
+    )
+    cap_security_locations = _runtime_cap(
+        state,
+        "cap_security_locations",
+        CAP_SECURITY_LOCATIONS,
+    )
+    cap_security_snippets = _runtime_cap(
+        state,
+        "cap_security_snippets",
+        CAP_SECURITY_SNIPPETS,
+    )
+    cap_security_signal_snippets = _runtime_cap(
+        state,
+        "cap_security_signal_snippets",
+        CAP_SECURITY_SIGNAL_SNIPPETS,
+    )
 
     all_evs: List[Evidence] = []
     for _, evs in evidences.items():
@@ -127,7 +158,7 @@ def evidence_aggregator(state: AgentState) -> Dict:
             if p:
                 repo_files.add(p)
 
-    report_paths = _collect_report_paths(all_evs)
+    report_paths = _collect_report_paths(all_evs)[:cap_report_paths]
     verified: List[str] = []
     hallucinated: List[str] = []
     if repo_files and report_paths:
@@ -148,10 +179,10 @@ def evidence_aggregator(state: AgentState) -> Dict:
                 found=True,
                 content="\n".join(
                     ["Verified paths:"]
-                    + verified_sorted[:CAP_CROSSREF_PER_TYPE]
+                    + verified_sorted[:cap_crossref_per_type]
                     + [""]
                     + ["Hallucinated paths:"]
-                    + hallucinated_sorted[:CAP_CROSSREF_PER_TYPE]
+                    + hallucinated_sorted[:cap_crossref_per_type]
                 ),
                 location="src/nodes/aggregator.py",
                 rationale="Cross-referenced PDF paths against repository file index",
@@ -159,7 +190,7 @@ def evidence_aggregator(state: AgentState) -> Dict:
             )
         )
 
-        for p in verified_sorted[:CAP_CROSSREF_PER_TYPE]:
+        for p in verified_sorted[:cap_crossref_per_type]:
             crossref_evs.append(
                 Evidence(
                     goal="report_accuracy",
@@ -171,7 +202,7 @@ def evidence_aggregator(state: AgentState) -> Dict:
                 )
             )
 
-        for p in hallucinated_sorted[:CAP_CROSSREF_PER_TYPE]:
+        for p in hallucinated_sorted[:cap_crossref_per_type]:
             crossref_evs.append(
                 Evidence(
                     goal="report_accuracy",
@@ -185,13 +216,15 @@ def evidence_aggregator(state: AgentState) -> Dict:
 
     safe_evs = evidences.get("safe_tool_engineering", []) or []
     hit_locs, hit_snips = _collect_security_hit_locations(safe_evs)
+    hit_locs = hit_locs[:cap_security_locations]
+    hit_snips = hit_snips[:cap_security_snippets]
     has_hits = bool(hit_locs or hit_snips)
 
     security_signal = Evidence(
         goal="security_override_signal",
         found=has_hits,
         content=(
-            "Unsafe execution detected:\n" + "\n".join(hit_snips[:CAP_SECURITY_SIGNAL_SNIPPETS])
+            "Unsafe execution detected:\n" + "\n".join(hit_snips[:cap_security_signal_snippets])
             if hit_snips
             else (
                 "Unsafe execution detected."
@@ -204,7 +237,7 @@ def evidence_aggregator(state: AgentState) -> Dict:
         confidence=0.95,
     )
 
-    citations = _flatten_locations(all_evs)
+    citations = _flatten_locations(all_evs)[:cap_locations]
     citation_evidence = Evidence(
         goal="citation_pool",
         found=True,

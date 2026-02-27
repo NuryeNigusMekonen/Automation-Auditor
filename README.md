@@ -184,6 +184,13 @@ uv run python -m src.run \
   --out ./audit/report_onpeer_generated/peer_audit.md \
   --rubric ./rubric/week2_rubric.json \
   --enable-vision
+
+# Offline deterministic mode (no LLM calls)
+uv run python -m src.run \
+  --repo https://github.com/user/project \
+  --pdf ./reports/week2_takeaway.pdf \
+  --out ./audit/report_onpeer_generated/peer_audit_offline.md \
+  --offline
 ```
 
 Generated audit report:
@@ -195,6 +202,14 @@ Convenience targets:
 ```bash
 make self_audit
 make peer_audit
+```
+
+Runtime caps (optional):
+
+```bash
+AUDITOR_CAP_REPORT_PATHS=1500
+AUDITOR_CAP_ALLOWED_CITATIONS=40
+AUDITOR_CAP_EVIDENCE_ITEMS=60
 ```
 
 

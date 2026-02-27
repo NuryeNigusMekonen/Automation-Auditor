@@ -25,6 +25,15 @@ CAP_CITED_EVIDENCE = _env_int("AUDITOR_CAP_CITED_EVIDENCE", 12, max_value=200)
 CAP_EVIDENCE_ITEMS = _env_int("AUDITOR_CAP_EVIDENCE_ITEMS", 80, max_value=5000)
 
 
+def _runtime_cap(state: AgentState, key: str, default: int) -> int:
+    cfg = state.get("runtime_config") or {}
+    if isinstance(cfg, dict):
+        value = cfg.get(key)
+        if isinstance(value, int) and value > 0:
+            return value
+    return default
+
+
 def _judge_llm() -> ChatOpenAI:
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     return ChatOpenAI(model=model, temperature=0)
@@ -87,6 +96,42 @@ def _sanitize_citations(cited: List[str], allowed: List[str]) -> List[str]:
     return kept[:CAP_CITED_EVIDENCE]
 
 
+def _offline_judicial_opinion(
+    role: str,
+    criterion_id: str,
+    evidence: List[Evidence],
+    allowed: List[str],
+) -> JudicialOpinion:
+    has_evidence = bool(evidence)
+    any_negative = any(e.found is False for e in (evidence or []))
+
+    if not has_evidence:
+        score = 1
+    elif any_negative:
+        score = 2
+    else:
+        score = 4
+
+    role_word = {
+        "Prosecutor": "risk",
+        "Defense": "effort",
+        "TechLead": "maintainability",
+    }.get(role, "analysis")
+
+    summary = (
+        f"{role_word}: offline deterministic evaluation for {criterion_id}. "
+        f"evidence_items={len(evidence)} any_negative={any_negative}."
+    )
+
+    return JudicialOpinion(
+        judge=role,
+        criterion_id=criterion_id,
+        score=score,
+        argument=summary,
+        cited_evidence=allowed[:1],
+    )
+
+
 def _has_confirmed_security_signal(evidence: List[Evidence]) -> bool:
     for e in evidence or []:
         if e.goal == "security_override_signal" and e.found is True:
@@ -104,7 +149,7 @@ def _run_judge(
     philosophy: str,
     behavioral_contract: str,
 ) -> List[JudicialOpinion]:
-    llm = _judge_llm().with_structured_output(JudicialOpinion, include_raw=False)
+    offline_mode = bool(state.get("offline_mode", False))
     outputs: List[JudicialOpinion] = []
 
     for dim in state["rubric_dimensions"]:
@@ -121,53 +166,62 @@ def _run_judge(
 
         security_confirmed = _has_confirmed_security_signal(evidence)
 
-        prompt = (
-            f"You are acting as: {role}\n\n"
-            f"Philosophy:\n{philosophy}\n\n"
-            f"Behavioral contract:\n{behavioral_contract}\n\n"
-            "Mandatory constraints:\n"
-            "- Score is integer 1 to 5.\n"
-            "- Cite only from Allowed citations.\n"
-            "- If Allowed citations is empty, cited_evidence is [].\n"
-            "- Never invent file paths or tools.\n"
-            "- Return only a JudicialOpinion object.\n"
-            "- You must not claim a security flaw is confirmed unless security_confirmed=true.\n"
-            "- If security_confirmed=false, you may say no confirmed security flaw in evidence.\n\n"
-            f"security_confirmed={str(security_confirmed).lower()}\n\n"
-            f"Criterion id: {cid}\n"
-            f"Criterion name: {dim.get('name', '')}\n\n"
-            f"Forensic instruction:\n{forensic}\n\n"
-            f"Success pattern:\n{success}\n\n"
-            f"Failure pattern:\n{failure}\n\n"
-            "Allowed citations:\n"
-            f"{json.dumps(allowed, indent=2)}\n\n"
-            "Evidence JSON:\n"
-            f"{json.dumps([e.model_dump() for e in evidence[:CAP_EVIDENCE_ITEMS]], indent=2)}\n"
-        )
-
         op: JudicialOpinion
-        last_err: str = ""
+        if offline_mode:
+            op = _offline_judicial_opinion(role, cid, evidence, allowed)
+        else:
+            llm = _judge_llm().with_structured_output(JudicialOpinion, include_raw=False)
+            cap_evidence_items = _runtime_cap(
+                state,
+                "cap_evidence_items",
+                CAP_EVIDENCE_ITEMS,
+            )
 
-        for attempt in range(3):
-            try:
-                op = llm.invoke(prompt)
-                break
-            except Exception as e:
-                last_err = f"{type(e).__name__}: {e}"
-                if attempt < 2:
-                    prompt = (
-                        prompt
-                        + "\n\nRetry rule: Return a valid JudicialOpinion object that matches the schema exactly."
+            prompt = (
+                f"You are acting as: {role}\n\n"
+                f"Philosophy:\n{philosophy}\n\n"
+                f"Behavioral contract:\n{behavioral_contract}\n\n"
+                "Mandatory constraints:\n"
+                "- Score is integer 1 to 5.\n"
+                "- Cite only from Allowed citations.\n"
+                "- If Allowed citations is empty, cited_evidence is [].\n"
+                "- Never invent file paths or tools.\n"
+                "- Return only a JudicialOpinion object.\n"
+                "- You must not claim a security flaw is confirmed unless security_confirmed=true.\n"
+                "- If security_confirmed=false, you may say no confirmed security flaw in evidence.\n\n"
+                f"security_confirmed={str(security_confirmed).lower()}\n\n"
+                f"Criterion id: {cid}\n"
+                f"Criterion name: {dim.get('name', '')}\n\n"
+                f"Forensic instruction:\n{forensic}\n\n"
+                f"Success pattern:\n{success}\n\n"
+                f"Failure pattern:\n{failure}\n\n"
+                "Allowed citations:\n"
+                f"{json.dumps(allowed, indent=2)}\n\n"
+                "Evidence JSON:\n"
+                f"{json.dumps([e.model_dump() for e in evidence[:cap_evidence_items]], indent=2)}\n"
+            )
+
+            last_err: str = ""
+            for attempt in range(3):
+                try:
+                    op = llm.invoke(prompt)
+                    break
+                except Exception as e:
+                    last_err = f"{type(e).__name__}: {e}"
+                    if attempt < 2:
+                        prompt = (
+                            prompt
+                            + "\n\nRetry rule: Return a valid JudicialOpinion object that matches the schema exactly."
+                        )
+                        continue
+
+                    op = JudicialOpinion(
+                        judge=role,
+                        criterion_id=cid,
+                        score=1,
+                        argument=f"risk: structured output failure. detail={last_err}",
+                        cited_evidence=[],
                     )
-                    continue
-
-                op = JudicialOpinion(
-                    judge=role,
-                    criterion_id=cid,
-                    score=1,
-                    argument=f"risk: structured output failure. detail={last_err}",
-                    cited_evidence=[],
-                )
 
         op.judge = role
         op.criterion_id = cid
