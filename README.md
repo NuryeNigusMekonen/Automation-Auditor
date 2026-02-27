@@ -1,186 +1,87 @@
 # Automation Auditor
 
-Digital Courtroom Multi-Agent Evaluator 
+Automation Auditor is a multi-agent, rubric-driven evaluation system that audits a GitHub repository and an architecture PDF, then produces a deterministic markdown report.
 
-## Overview
+It combines parallel evidence collection, structured judge reasoning, and rule-based synthesis to reduce hallucination and improve consistency.
 
-Automation Auditor is a hierarchical, production-grade LangGraph system that evaluates a GitHub repository and an architectural PDF using a Digital Courtroom model.
+## Why this project exists
 
-The system performs structured forensic analysis, applies dialectical judicial reasoning, and generates a deterministic, actionable audit report in Markdown format.
+Traditional single-prompt grading is hard to trust for engineering evaluation. This project separates:
 
-This is not a single-prompt grader. It is a multi-agent swarm with explicit role separation, typed state management, and constitutional governance.
+- Evidence collection (facts)
+- Judicial interpretation (opinions)
+- Final synthesis (deterministic rules)
 
----
+The result is a more auditable and reproducible evaluation pipeline.
 
-## Architectural Model: The Digital Courtroom
+## System architecture
 
-The system is built as a three-layer hierarchical state graph.
+The runtime is a staged LangGraph workflow:
 
-### Layer 1 - Detective Layer (Forensic Sub-Agents)
+1. Detectives run in parallel and gather evidence.
+2. Evidence is merged and validated.
+3. Judges run in parallel per criterion.
+4. Chief Justice applies deterministic synthesis rules.
+5. A final markdown report is emitted.
 
-These agents collect objective evidence only. They do not score or opinionate.
-
-* RepoInvestigator
-
-  * Analyzes Git history
-  * Verifies typed state definitions
-  * Parses AST to inspect graph wiring
-  * Validates sandboxed tooling
-
-* DocAnalyst
-
-  * Parses PDF report
-  * Checks theoretical depth
-  * Cross-references claims against actual repository structure
-
-* VisionInspector (optional)
-
-  * Extracts images from PDF
-  * Classifies diagram type
-  * Verifies presence of parallel fan-out / fan-in architecture
-
-Output: Structured Evidence objects stored in typed state.
-
----
-
-### Layer 2 - Judicial Layer (Dialectical Bench)
-
-Three independent personas evaluate the same evidence for each rubric criterion.
-
-* Prosecutor
-  Philosophy: Trust no one. Assume structural weakness.
-  Focus: Security flaws, orchestration fraud, hallucination liability.
-
-* Defense
-  Philosophy: Reward engineering effort and intent.
-  Focus: Depth of reasoning, iteration history, architectural insight.
-
-* Tech Lead
-  Philosophy: Does it work? Is it maintainable?
-  Focus: State reducers, safety boundaries, practical viability.
-
-Each judge produces structured JudicialOpinion objects using enforced JSON schema validation.
-
-Parallel fan-out ensures independent reasoning before synthesis.
-
----
-
-### Layer 3 - Supreme Court (Synthesis Engine)
-
-The ChiefJusticeNode resolves conflicts using deterministic rules.
-
-It does not average scores blindly.
-
-Hardcoded rules include:
-
-* Security Override
-* Fact Supremacy
-* Variance-based re-evaluation
-* Dissent summary requirement
-
-Output: Structured Markdown Audit Report containing:
-
-* Executive Summary
-* Criterion Breakdown
-* Conflict Analysis
-* Remediation Plan
-
----
-
-## State Management
-
-State is strictly typed using:
-
-* Pydantic BaseModel
-* TypedDict
-* Explicit reducers (operator.add, operator.ior)
-
-This prevents data overwriting during parallel execution.
-
-No untyped dictionary passing is allowed.
-
----
-
-## The Rubric as Constitution
-
-The file:
-
-rubric/week2_rubric.json
-
-Defines:
-
-* Forensic instructions for detectives
-* Persona-specific judicial logic
-* Synthesis rules
-
-The swarm dynamically loads this file at runtime.
-
-This allows governance updates without code changes.
-
----
-
-## Graph Orchestration
-
-The LangGraph workflow enforces:
-
-Detectives (Parallel Fan-Out)
-→ Evidence Aggregation (Fan-In)
-→ Judges (Parallel Fan-Out)
-→ Chief Justice (Deterministic Synthesis)
-→ Final Markdown Report
-
-This ensures architectural rigor and prevents linear single-prompt grading.
-
-### Execution Diagram
+### Execution diagram
 
 ```mermaid
 flowchart TD
-  S([START])
+    S([START])
 
-  S --> RI[repo_investigator]
-  S --> DA[doc_analyst]
-  S --> VI[vision_inspector]
+    S --> RI[repo_investigator]
+    S --> DA[doc_analyst]
+    S --> VI[vision_inspector]
 
-  RI --> EA[evidence_aggregator]
-  DA --> EA
-  VI --> EA
+    RI --> EA[evidence_aggregator]
+    DA --> EA
+    VI --> EA
 
-  EA --> OG[orchestration_guard]
+    EA --> OG[orchestration_guard]
 
-  OG -->|guard failed| AB[abort]
-  AB --> CJ[chief_justice]
+    OG -->|guard failed| AB[abort]
+    AB --> CJ[chief_justice]
 
-  OG -->|guard passed| JD[judges_dispatch]
-  JD --> PR[prosecutor]
-  JD --> DE[defense]
-  JD --> TL[tech_lead]
+    OG -->|guard passed| JD[judges_dispatch]
+    JD --> PR[prosecutor]
+    JD --> DE[defense]
+    JD --> TL[tech_lead]
 
-  PR --> OA[opinions_aggregator]
-  DE --> OA
-  TL --> OA
+    PR --> OA[opinions_aggregator]
+    DE --> OA
+    TL --> OA
 
-  OA --> CJ
-  CJ --> E([END])
+    OA --> CJ
+    CJ --> E([END])
 ```
 
----
+## Core components
 
-## Installation
+- Graph orchestration: [src/graph.py](src/graph.py)
+- State contract and reducers: [src/state.py](src/state.py)
+- Detective nodes: [src/nodes/detectives.py](src/nodes/detectives.py)
+- Judge nodes: [src/nodes/judges.py](src/nodes/judges.py)
+- Deterministic synthesis: [src/nodes/justice.py](src/nodes/justice.py)
+- Runtime config and rubric validation: [src/config.py](src/config.py)
+- CLI entrypoint: [src/run.py](src/run.py)
 
-Recommended workflow (uv):
+## Quick start
+
+### 1) Install dependencies
 
 ```bash
 uv sync
 source .venv/bin/activate
 ```
 
-Create `.env` in project root:
+### 2) Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
-Set required key:
+Required:
 
 ```bash
 OPENAI_API_KEY=your_key_here
@@ -190,166 +91,117 @@ Optional:
 
 ```bash
 OPENAI_MODEL=gpt-4o-mini
+AUDITOR_OFFLINE_MODE=false
 ```
 
-Do not commit `.env`.
-
----
-
-## Usage
-
-Run the auditor:
+### 3) Run an audit
 
 ```bash
 uv run python -m src.run \
   --repo <github_repo_url> \
   --pdf <path_to_pdf> \
-  --out <output_markdown_path>
+  --out <output_markdown_path> \
+  --rubric rubric/week2_rubric.json \
+  --enable-vision
 ```
 
-Example:
+Offline deterministic mode (no LLM calls):
 
 ```bash
 uv run python -m src.run \
-  --repo https://github.com/user/project \
-  --pdf ./reports/week2_takeaway.pdf \
-  --out ./audit/report_onpeer_generated/peer_audit.md \
-  --rubric ./rubric/week2_rubric.json \
-  --enable-vision
-
-# Offline deterministic mode (no LLM calls)
-uv run python -m src.run \
-  --repo https://github.com/user/project \
-  --pdf ./reports/week2_takeaway.pdf \
-  --out ./audit/report_onpeer_generated/peer_audit_offline.md \
+  --repo <github_repo_url> \
+  --pdf <path_to_pdf> \
+  --out <output_markdown_path> \
+  --rubric rubric/week2_rubric.json \
   --offline
 ```
 
-Generated audit report:
+## Makefile workflows
 
-`audit/report_onpeer_generated/`
-
-Convenience targets:
+Standard:
 
 ```bash
 make self_audit
 make peer_audit
 ```
 
-Runtime caps (optional):
+Timestamped archive outputs:
 
 ```bash
-AUDITOR_CAP_REPORT_PATHS=1500
-AUDITOR_CAP_ALLOWED_CITATIONS=40
-AUDITOR_CAP_EVIDENCE_ITEMS=60
+make self_audit_archive
+make peer_audit_archive
 ```
 
+Generated reports are written under:
 
----
+- [audit/report_onself_generated](audit/report_onself_generated)
+- [audit/report_onpeer_generated](audit/report_onpeer_generated)
+- [audit/archive](audit/archive)
 
-## Engineering Decisions
+## Rubric model
 
-* AST parsing instead of regex for structural verification
-* Sandboxed git cloning via tempfile isolation
-* Strict structured output enforcement for judges
-* Deterministic conflict resolution in synthesis layer
-* Typed state reducers to protect parallel execution
+Rubric definitions are loaded from [rubric/week2_rubric.json](rubric/week2_rubric.json).
 
----
+Validation enforces required dimension and synthesis-rule keys before execution, preventing malformed policy files from entering the pipeline.
 
-## Production Considerations
+## Production operations
 
-* Token usage optimized by limiting evidence packet size
-* Structured retry policy for invalid LLM JSON output
-* Configurable parallelism
-* Usage limits recommended for API cost control
-
----
-
-## Production Operations
-
-### Required Environment Variables
-
-Set these in your deployment environment:
-
-```bash
-OPENAI_API_KEY=<required>
-OPENAI_MODEL=gpt-4o-mini
-```
-
-Optional operational controls:
-
-```bash
-AUDITOR_OFFLINE_MODE=false
-AUDITOR_CAP_REPORT_PATHS=2000
-AUDITOR_CAP_ALLOWED_CITATIONS=50
-AUDITOR_CAP_EVIDENCE_ITEMS=80
-```
-
-### Runtime Packaging and Startup
+### Runtime hardening
 
 Container runtime includes:
 
-* Pinned Python runtime image (`python:3.12.8-slim-bookworm`)
-* Non-root execution user (`appuser`)
-* Healthcheck (`python -m src.run --help`)
-* Startup smoke command in container entrypoint before launching requested args
+- Pinned base image
+- Non-root execution user
+- Healthcheck
+- Startup smoke command in entrypoint
 
-### SLO Targets
+See [Dockerfile](Dockerfile) and [scripts/container-entrypoint.sh](scripts/container-entrypoint.sh).
 
-Recommended baseline SLOs:
+### Recommended SLOs
 
-* Availability: 99.5% monthly for audit execution endpoint/job runner
-* Successful run rate: >= 98% of scheduled/on-demand audits
-* P95 audit completion latency: <= 5 minutes for standard rubric + medium repo
-* False-start rate (startup/config failures): < 1%
+- Availability: 99.5% monthly
+- Successful run rate: >= 98%
+- P95 run latency: <= 5 minutes (medium repo + standard rubric)
+- Startup/config failure rate: < 1%
 
-### Common Failure Modes
+### Common failure classes
 
-Typical production failure classes:
+- Missing/invalid environment variables
+- Rubric schema validation failures
+- Git clone/network/provider API failures
+- Invalid input artifacts (repo URL/PDF)
+- Provider quota or rate limits
 
-* Missing or invalid env vars (e.g., `OPENAI_API_KEY` absent)
-* Rubric schema validation failure (missing required keys)
-* External dependency failure (GitHub clone/network/LLM API timeout)
-* Input artifact issues (missing PDF, unreadable PDF, malformed repo URL)
-* Rate limiting or quota exhaustion from model provider
+### Incident triage
 
-### Incident Response Steps
+1. Verify container health and CI status.
+2. Check startup smoke and runtime logs.
+3. Validate env vars and rubric file.
+4. Re-run in offline mode to isolate provider issues.
+5. If offline passes and online fails, treat as external/provider incident.
 
-Use this runbook for first response:
+## Development and quality
 
-1. Confirm deployment health (`docker ps`, health status, CI status).
-2. Check startup smoke output and application logs for configuration errors.
-3. Validate critical env vars and rubric file integrity.
-4. Re-run failing command in deterministic mode for triage:
+Run local quality checks:
 
-  ```bash
-  uv run python -m src.run --repo <repo> --pdf <pdf> --out <out> --offline
-  ```
+```bash
+uv run python -m ruff check .
+uv run python -m pytest -q
+```
 
-5. If offline succeeds but online fails, treat as external/API incident (provider or network).
-6. If both fail, isolate to local parsing/schema/runtime logic and roll back to previous known-good commit if needed.
-7. Document impact, timeline, root cause, and corrective action in post-incident notes.
+CI runs lint, tests, CLI smoke, and Docker build/run checks via [ .github/workflows/ci.yml ](.github/workflows/ci.yml).
 
----
+## Project status
 
-## Future Improvements
+Current implementation includes:
 
-* Add CI integration for automated PR auditing
-* Add caching layer for repository analysis
-* Expand diagram reasoning capabilities
-* Add policy versioning for rubric updates
+- Parallel detective and judge fan-out/fan-in architecture
+- Typed state models with reducers
+- Structured judicial outputs with guardrails
+- Deterministic synthesis rules for final scoring
+- Configurable runtime caps for payload/citation controls
+- Offline deterministic execution mode
 
----
+## License / usage
 
-## Educational Objective
-
-This project demonstrates:
-
-* Multi-agent orchestration
-* Governance via machine-readable constitution
-* Separation of facts and interpretation
-* Deterministic synthesis over stochastic reasoning
-* Production-grade architectural thinking
-
----
+This repository is intended for educational and engineering evaluation workflows. Adapt the rubric and operations profile for your organization’s governance and compliance needs.
