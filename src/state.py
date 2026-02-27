@@ -24,13 +24,31 @@ class JudicialOpinion(BaseModel):
     cited_evidence: List[str] = Field(default_factory=list)
 
 
+def merge_evidence_dicts(
+    left: Dict[str, List[Evidence]] | None,
+    right: Dict[str, List[Evidence]] | None,
+) -> Dict[str, List[Evidence]]:
+    out: Dict[str, List[Evidence]] = {}
+    if left:
+        for k, v in left.items():
+            out[k] = list(v or [])
+    if right:
+        for k, v in right.items():
+            if k not in out:
+                out[k] = list(v or [])
+            else:
+                out[k].extend(list(v or []))
+    return out
+
+
 class AgentState(TypedDict):
     repo_url: str
     pdf_path: str
     rubric_dimensions: List[Dict]
     enable_vision: bool
+    workspace_dir: str
 
-    evidences: Annotated[Dict[str, List[Evidence]], operator.ior]
+    evidences: Annotated[Dict[str, List[Evidence]], merge_evidence_dicts]
     opinions: Annotated[List[JudicialOpinion], operator.add]
 
     final_report: Optional[dict]

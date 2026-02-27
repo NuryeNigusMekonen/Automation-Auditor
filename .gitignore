@@ -2,7 +2,5 @@
 .venv
 pycache/
 *.pyc
-audit/report_onpeer_generated/
 uv.lock
-.env.example
 reports/

@@ -12,18 +12,25 @@ REQUIRED_CRITERIA = [
 
 
 def needs_more_evidence(state: AgentState) -> Dict:
+    """
+    Guard node.
+
+    Block judges only when required evidence keys are missing entirely.
+    Do NOT block when evidence exists but found=False, because negative findings
+    are still valid evidence for judges to score against.
+    """
     missing: List[str] = []
+
+    evidences = state.get("evidences", {}) or {}
     for cid in REQUIRED_CRITERIA:
-        evs = state["evidences"].get(cid, [])
+        evs = evidences.get(cid, [])
         if not evs:
-            missing.append(cid)
-        elif any(e.found is False for e in evs):
             missing.append(cid)
 
     if not missing:
         return {}
 
-    msg = "Missing required evidence: " + ", ".join(missing)
+    msg = "Missing required evidence keys: " + ", ".join(missing)
     return {
         "evidences": {
             "orchestration_guard": [
@@ -31,17 +38,10 @@ def needs_more_evidence(state: AgentState) -> Dict:
                     goal="orchestration_guard",
                     found=False,
                     content=msg,
-                    location="graph",
-                    rationale="Guard node detected missing evidence before judge fan-out",
+                    location="src/nodes/routing.py",
+                    rationale="Required evidence key absent. Judges would be scoring without baseline facts.",
                     confidence=0.9,
                 )
             ]
         }
     }
-
-
-def route_after_aggregation(state: AgentState) -> str:
-    evs = state["evidences"].get("orchestration_guard", [])
-    if evs and any(e.found is False for e in evs):
-        return "END"
-    return "JUDGES"

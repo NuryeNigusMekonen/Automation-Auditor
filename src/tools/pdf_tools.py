@@ -1,4 +1,3 @@
-# src/tools/pdf_tools.py
 from __future__ import annotations
 
 import re
@@ -25,44 +24,92 @@ def ingest_pdf_chunks(pdf_path: str, max_chars: int = 2500) -> List[str]:
     return chunks
 
 
-def extract_keyword_evidence(chunks: List[str], keywords: List[str], goal: str) -> List[Evidence]:
+def extract_keyword_evidence(
+    chunks: List[str], keywords: List[str], goal: str, top_k: int = 3
+) -> List[Evidence]:
     joined = "\n".join(chunks)
-    low = joined.lower()
+    low_joined = joined.lower()
 
-    hits: List[str] = []
-    for k in keywords:
-        if k.lower() in low:
-            hits.append(k)
+    hit_lines: List[str] = []
+    found_any = False
+
+    for kw in keywords:
+        kw_low = kw.lower()
+        if kw_low not in low_joined:
+            continue
+        found_any = True
+
+        scored: List[Tuple[int, int]] = []
+        for i, ch in enumerate(chunks):
+            low = (ch or "").lower()
+            score = 1 if kw_low in low else 0
+            if score > 0:
+                scored.append((i, score))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        for idx, _ in scored[: max(1, top_k)]:
+            snippet = (chunks[idx] or "").strip().replace("\n", " ")
+            snippet = snippet[:500]
+            hit_lines.append(f"keyword={kw} chunk={idx} snippet={snippet}")
 
     return [
         Evidence(
             goal=goal,
-            found=bool(hits),
-            content=("Keywords found: " + ", ".join(hits)) if hits else None,
+            found=found_any,
+            content="\n".join(hit_lines) if hit_lines else None,
             location="pdf",
-            rationale="Keyword scan over extracted PDF text",
-            confidence=0.7 if hits else 0.6,
+            rationale="Keyword scan with chunk excerpts",
+            confidence=0.75 if found_any else 0.6,
         )
     ]
 
 
 def extract_report_paths_evidence(chunks: List[str], goal: str) -> List[Evidence]:
     joined = "\n".join(chunks)
-    paths = sorted(set(re.findall(r"\b(?:src|rubric|audit|reports)/[A-Za-z0-9_./-]+\b", joined)))
+
+    # Handles:
+    # - src/foo/bar.py
+    # - src\foo\bar.py
+    # - paths inside backticks or quotes
+    # - paths followed by punctuation
+    pat = re.compile(
+        r"""(?ix)
+        (?:^|[\s"'`(\[])
+        
+        (
+          (?:src|rubric|audit|reports)
+          [\\/]
+          [A-Za-z0-9_.\-\\/]+
+        )
+        """
+    )
+
+    raw = pat.findall(joined)
+    norm: List[str] = []
+    for p in raw:
+        s = p.strip().strip(".,;:)]}>")
+        s = s.replace("\\", "/")
+        while "//" in s:
+            s = s.replace("//", "/")
+        norm.append(s)
+
+    paths = sorted(set(norm))
 
     return [
         Evidence(
             goal=goal,
             found=bool(paths),
-            content="\n".join(paths[:200]) if paths else None,
+            content="\n".join(paths[:2000]) if paths else None,
             location="pdf",
-            rationale="Regex extraction of repo-like paths from PDF text",
-            confidence=0.65 if paths else 0.55,
+            rationale="Extracted repo-like paths from PDF text with slash normalization",
+            confidence=0.8 if paths else 0.55,
         )
     ]
 
 
-def query_pdf_evidence(chunks: List[str], query: str, goal: str, top_k: int = 3) -> List[Evidence]:
+def query_pdf_evidence(
+    chunks: List[str], query: str, goal: str, top_k: int = 3
+) -> List[Evidence]:
     q = (query or "").strip().lower()
     if not q:
         return [
@@ -116,7 +163,7 @@ def query_pdf_evidence(chunks: List[str], query: str, goal: str, top_k: int = 3)
 
     content_lines: List[str] = []
     for idx, sc in top:
-        snippet = chunks[idx].strip().replace("\n", " ")
+        snippet = (chunks[idx] or "").strip().replace("\n", " ")
         snippet = snippet[:500]
         content_lines.append(f"chunk={idx} score={sc} snippet={snippet}")
 
@@ -126,7 +173,7 @@ def query_pdf_evidence(chunks: List[str], query: str, goal: str, top_k: int = 3)
             found=True,
             content="\n".join(content_lines),
             location="pdf:topk",
-            rationale="RAG-lite chunk retrieval using token overlap scoring",
+            rationale="Chunk retrieval via token overlap scoring",
             confidence=0.75,
         )
     ]

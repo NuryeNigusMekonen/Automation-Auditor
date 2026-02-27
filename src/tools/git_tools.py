@@ -1,21 +1,28 @@
-# src/tools/git_tools.py
 from __future__ import annotations
 
 import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 from urllib.parse import urlparse
 
 from src.state import Evidence
+
+# Keep TemporaryDirectory objects alive for the duration of a run.
+# Keyed by workspace_dir so multiple nodes reuse the same sandbox.
+_WORKSPACE_SANDBOXES: Dict[str, tempfile.TemporaryDirectory] = {}
 
 
 def _classify_git_clone_error(stderr: str, stdout: str) -> str:
     s = (stderr or "") + "\n" + (stdout or "")
     low = s.lower()
 
-    if "authentication failed" in low or "could not read username" in low or "permission denied" in low:
+    if (
+        "authentication failed" in low
+        or "could not read username" in low
+        or "permission denied" in low
+    ):
         return "auth_failed"
     if "repository not found" in low or "not found" in low:
         return "repo_not_found"
@@ -44,28 +51,43 @@ def validate_repo_url(repo_url: str) -> None:
         raise ValueError("Repo URL must look like https://github.com/owner/repo")
 
 
-def clone_repo_sandboxed(repo_url: str) -> str:
+def _get_or_create_sandbox(workspace_dir: str) -> Path:
+    root = Path(workspace_dir)
+    root.mkdir(parents=True, exist_ok=True)
+
+    td = _WORKSPACE_SANDBOXES.get(workspace_dir)
+    if td is None:
+        td = tempfile.TemporaryDirectory(prefix="auditor_repo_", dir=str(root))
+        _WORKSPACE_SANDBOXES[workspace_dir] = td
+
+    return Path(td.name)
+
+
+def clone_repo_sandboxed(repo_url: str, workspace_dir: str) -> str:
     validate_repo_url(repo_url)
 
-    tmpdir = tempfile.TemporaryDirectory(prefix="auditor_repo_")
-    repo_path = Path(tmpdir.name) / "repo"
+    sandbox_root = _get_or_create_sandbox(workspace_dir)
+    repo_path = sandbox_root / "repo"
+
+    # Idempotent: reuse existing clone in this sandbox
+    git_dir = repo_path / ".git"
+    if git_dir.exists() and git_dir.is_dir():
+        return str(repo_path)
 
     proc = subprocess.run(
         ["git", "clone", "--depth", "200", repo_url, str(repo_path)],
         capture_output=True,
         text=True,
         check=False,
+        timeout=180,
     )
     if proc.returncode != 0:
         stderr = (proc.stderr or "").strip()
         stdout = (proc.stdout or "").strip()
         code = _classify_git_clone_error(stderr, stdout)
-        tmpdir.cleanup()
-        raise RuntimeError(f"git clone failed ({code}). stdout={stdout} stderr={stderr}")
-
-    if not hasattr(clone_repo_sandboxed, "_keepers"):
-        clone_repo_sandboxed._keepers = []  # type: ignore[attr-defined]
-    clone_repo_sandboxed._keepers.append(tmpdir)  # type: ignore[attr-defined]
+        raise RuntimeError(
+            f"git clone failed ({code}). stdout={stdout} stderr={stderr}"
+        )
 
     return str(repo_path)
 
@@ -76,6 +98,7 @@ def _git(repo_path: str, args: List[str]) -> Tuple[int, str, str]:
         capture_output=True,
         text=True,
         check=False,
+        timeout=60,
     )
     return proc.returncode, (proc.stdout or ""), (proc.stderr or "")
 
@@ -86,7 +109,7 @@ def extract_git_history(repo_path: str) -> List[Evidence]:
         ["log", "--reverse", "--date=iso-strict", "--pretty=format:%H %ad %s"],
     )
     found = code == 0 and out.strip() != ""
-    content = out.strip() if found else ((err.strip() or None))
+    content = out.strip() if found else (err.strip() or None)
 
     return [
         Evidence(

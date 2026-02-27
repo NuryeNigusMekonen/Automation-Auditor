@@ -1,25 +1,46 @@
-.PHONY: install run self_audit format lint test clean
-
+.PHONY: install run audit self_audit peer_audit format lint test clean
+ENV_RUN = bash -lc 'set -a; [ -f .env ] && source .env; set +a; '
 install:
 	uv sync
 
 run:
-	python -m src.run --help
+	uv run python -m src.run --help
+
+# Defaults. Override from CLI.
+REPO ?= https://github.com/NuryeNigusMekonen/Automation-Auditor.git
+PDF  ?= ./reports/week2_takeaway.pdf
+OUT  ?= ./audit/report_onself_generated/self_audit.md
+RUBRIC ?= rubric/week2_rubric.json
+ENABLE_VISION ?= 1
+
+audit:
+	$(ENV_RUN) uv run python -m src.run \
+		--repo "$(REPO)" \
+		--pdf "$(PDF)" \
+		--out "$(OUT)" \
+		--rubric "$(RUBRIC)" \
+		$(if $(filter 1 true TRUE yes YES,$(ENABLE_VISION)),--enable-vision,)
 
 self_audit:
-	python -m src.run \
-		--repo https://github.com/NuryeNigusMekonen/Automation-Auditor.git \
-		--pdf ./reports/week2_takeaway.pdf \
-		--out ./audit/report_onself_generated/self_audit.md
+	$(MAKE) audit \
+		REPO="https://github.com/NuryeNigusMekonen/Automation-Auditor.git" \
+		PDF="./reports/week2_takeaway.pdf" \
+		OUT="./audit/report_onself_generated/self_audit.md"
+
+peer_audit:
+	$(MAKE) audit \
+		REPO="https://github.com/habeshacoder/Automaton-Auditor.git" \
+		PDF="./reports/week2_takeaway.pdf" \
+		OUT="./audit/report_onpeer_generated/habesha_audit.md"
 
 format:
-	python -m ruff format .
+	uv run python -m ruff format .
 
 lint:
-	python -m ruff check .
+	uv run python -m ruff check .
 
 test:
-	python -m pytest -q
+	uv run python -m pytest -q
 
 clean:
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ .mypy_cache

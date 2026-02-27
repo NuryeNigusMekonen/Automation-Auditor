@@ -1,9 +1,8 @@
-# src/tools/ast_tools.py
 from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set, Tuple
 
 from src.state import Evidence
 
@@ -38,6 +37,12 @@ def _find_graph_file(repo_path: str) -> Optional[Path]:
     return None
 
 
+def _const_str(n: ast.AST) -> Optional[str]:
+    if isinstance(n, ast.Constant) and isinstance(n.value, str):
+        return n.value
+    return None
+
+
 def analyze_graph_structure(repo_path: str) -> List[Evidence]:
     goal = "graph_orchestration"
 
@@ -49,7 +54,7 @@ def analyze_graph_structure(repo_path: str) -> List[Evidence]:
                 found=False,
                 content=None,
                 location="repo",
-                rationale="No graph.py file found to inspect StateGraph wiring",
+                rationale="No graph.py found for StateGraph wiring inspection",
                 confidence=0.95,
             )
         ]
@@ -61,8 +66,8 @@ def analyze_graph_structure(repo_path: str) -> List[Evidence]:
                 goal=goal,
                 found=False,
                 content=None,
-                location=str(graph_file),
-                rationale="graph.py exists but could not be read",
+                location=str(graph_file.relative_to(Path(repo_path))),
+                rationale="graph.py exists but was not readable",
                 confidence=0.8,
             )
         ]
@@ -74,9 +79,9 @@ def analyze_graph_structure(repo_path: str) -> List[Evidence]:
             Evidence(
                 goal=goal,
                 found=False,
-                content=f"SyntaxError parsing {graph_file.name}: {e}",
-                location=str(graph_file),
-                rationale="Could not AST parse graph file",
+                content=f"SyntaxError parsing graph.py: {e}",
+                location=str(graph_file.relative_to(Path(repo_path))),
+                rationale="AST parse failed",
                 confidence=0.9,
             )
         ]
@@ -84,78 +89,118 @@ def analyze_graph_structure(repo_path: str) -> List[Evidence]:
     stategraph_calls = 0
     add_edge_calls = 0
     add_conditional_calls = 0
-    add_node_names: set[str] = set()
 
-    start_edge_targets: list[str] = []
-    conditional_sources: set[str] = set()
+    nodes: Set[str] = set()
+    edges: List[Tuple[str, str]] = []
+    start_targets: List[str] = []
+    conditional_sources: Set[str] = set()
 
-    class CallVisitor(ast.NodeVisitor):
-        def visit_Call(self, node: ast.Call):
-            nonlocal stategraph_calls, add_edge_calls, add_conditional_calls, add_node_names
-            nonlocal start_edge_targets, conditional_sources
-
-            fn_name = ""
+    class V(ast.NodeVisitor):
+        def visit_Call(self, node: ast.Call) -> None:
+            nonlocal stategraph_calls, add_edge_calls, add_conditional_calls
+            fn = ""
             if isinstance(node.func, ast.Name):
-                fn_name = node.func.id
+                fn = node.func.id
             elif isinstance(node.func, ast.Attribute):
-                fn_name = node.func.attr
+                fn = node.func.attr
 
-            if fn_name == "StateGraph":
+            if fn == "StateGraph":
                 stategraph_calls += 1
 
-            if fn_name == "add_edge":
+            if fn == "add_node" and node.args:
+                name = _const_str(node.args[0])
+                if name:
+                    nodes.add(name)
+
+            if fn == "add_edge":
                 add_edge_calls += 1
                 if len(node.args) >= 2:
-                    a0, a1 = node.args[0], node.args[1]
-                    if isinstance(a0, ast.Name) and a0.id == "START":
-                        if isinstance(a1, ast.Constant) and isinstance(a1.value, str):
-                            start_edge_targets.append(a1.value)
+                    a0 = node.args[0]
+                    a1 = node.args[1]
 
-            if fn_name == "add_conditional_edges":
+                    src = None
+                    if isinstance(a0, ast.Name) and a0.id == "START":
+                        src = "START"
+                    else:
+                        src = _const_str(a0)
+
+                    dst = _const_str(a1)
+
+                    if src and dst:
+                        edges.append((src, dst))
+                        if src == "START":
+                            start_targets.append(dst)
+
+            if fn == "add_conditional_edges":
                 add_conditional_calls += 1
                 if node.args:
-                    src = node.args[0]
-                    if isinstance(src, ast.Constant) and isinstance(src.value, str):
-                        conditional_sources.add(src.value)
-
-            if fn_name == "add_node" and node.args:
-                a0 = node.args[0]
-                if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
-                    add_node_names.add(a0.value)
+                    src = _const_str(node.args[0])
+                    if src:
+                        conditional_sources.add(src)
 
             self.generic_visit(node)
 
-    CallVisitor().visit(tree)
+    V().visit(tree)
 
-    parallel_hint = len(set(start_edge_targets)) >= 2
+    uniq_start = sorted(set(start_targets))
+    detectives = {"repo_investigator", "doc_analyst", "vision_inspector"}
+    judges = {"prosecutor", "defense", "tech_lead"}
+    aggregator = "evidence_aggregator"
+    opinions_agg = "opinions_aggregator"
+    cj = "chief_justice"
 
-    # extra: look for routing helpers in the file (heuristic)
-    defined_functions: set[str] = set()
-    for n in ast.walk(tree):
-        if isinstance(n, ast.FunctionDef):
-            defined_functions.add(n.name)
+    has_detective_fanout = len([t for t in uniq_start if t in detectives]) >= 2
+    has_evidence_agg = aggregator in nodes
+    has_judge_fanout = any((aggregator, j) in edges for j in judges) or any(
+        (j, opinions_agg) in edges for j in judges
+    )
+    has_fanin_to_cj = (opinions_agg in nodes) and (cj in nodes)
+
+    has_conditionals = add_conditional_calls > 0
 
     found = stategraph_calls > 0 and add_edge_calls > 0
 
-    content_lines = [
-        f"graph_file={graph_file}",
-        f"StateGraph_calls={stategraph_calls}",
-        f"add_edge_calls={add_edge_calls}",
-        f"add_conditional_edges_calls={add_conditional_calls}",
-        f"add_node_names={sorted(list(add_node_names))[:100]}",
-        f"START_targets={sorted(list(set(start_edge_targets)))}",
-        f"parallel_hint={parallel_hint}",
-        f"conditional_sources={sorted(list(conditional_sources))}",
-        f"routing_helpers={sorted([n for n in defined_functions if 'route' in n.lower()])}",
-    ]
+    content_lines: List[str] = []
+    content_lines.append(f"graph_file={str(graph_file.relative_to(Path(repo_path)))}")
+    content_lines.append(f"StateGraph_calls={stategraph_calls}")
+    content_lines.append(f"add_edge_calls={add_edge_calls}")
+    content_lines.append(f"add_conditional_edges_calls={add_conditional_calls}")
+    content_lines.append(f"nodes={sorted(list(nodes))[:200]}")
+    content_lines.append(f"START_targets={uniq_start}")
+    content_lines.append(f"edges_sample={sorted(edges)[:60]}")
+    content_lines.append(f"conditional_sources={sorted(list(conditional_sources))}")
 
-    return [
-        Evidence(
-            goal=goal,
-            found=found,
-            content="\n".join(content_lines),
-            location=str(graph_file),
-            rationale="AST inspection of StateGraph wiring, fan-out, and conditional routing signals",
-            confidence=0.9 if found else 0.75,
-        )
+    content_lines.append(f"signal_detective_fanout={has_detective_fanout}")
+    content_lines.append(f"signal_evidence_aggregator={has_evidence_agg}")
+    content_lines.append(f"signal_judge_parallelism={has_judge_fanout}")
+    content_lines.append(f"signal_fanin_to_chief_justice={has_fanin_to_cj}")
+    content_lines.append(f"signal_conditionals_present={has_conditionals}")
+
+    base_ev = Evidence(
+        goal=goal,
+        found=found,
+        content="\n".join(content_lines),
+        location=str(graph_file.relative_to(Path(repo_path))),
+        rationale="AST inspection of StateGraph nodes, edges, fan-out, fan-in, and conditional routing",
+        confidence=0.9 if found else 0.75,
+    )
+
+    theory_lines = [
+        f"fan_out_detectives={has_detective_fanout} targets={sorted([t for t in uniq_start if t in detectives])}",
+        f"fan_in_detectives={has_evidence_agg} aggregator={aggregator}",
+        f"fan_out_judges={has_judge_fanout} judges={sorted(list(judges))}",
+        f"fan_in_judges={has_fanin_to_cj} opinions_aggregator={opinions_agg} chief_justice={cj}",
+        f"conditional_edges_present={has_conditionals} sources={sorted(list(conditional_sources))}",
+        "theory_mapping=Fan-Out->multiple START edges. Fan-In->aggregation nodes. Conditional edges->add_conditional_edges call sites.",
     ]
+    theory_found = has_detective_fanout or has_judge_fanout or has_conditionals
+    theory_ev = Evidence(
+        goal="theoretical_depth",
+        found=bool(theory_found),
+        content="\n".join(theory_lines),
+        location=str(graph_file.relative_to(Path(repo_path))),
+        rationale="Mapped Fan-In, Fan-Out, and conditional routing to concrete AST signals",
+        confidence=0.85 if theory_found else 0.7,
+    )
+
+    return [base_ev, theory_ev]

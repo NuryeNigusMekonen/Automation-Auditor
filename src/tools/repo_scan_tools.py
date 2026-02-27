@@ -1,129 +1,154 @@
 # src/tools/repo_scan_tools.py
 from __future__ import annotations
 
-import re
-import subprocess
-import tempfile
+import ast
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from src.state import Evidence
 
 
-def _run(cmd: List[str], cwd: str | None = None) -> Tuple[int, str, str]:
-    proc = subprocess.run(
-        cmd,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return proc.returncode, (proc.stdout or ""), (proc.stderr or "")
+def _read_text(p: Path) -> str:
+    return p.read_text(encoding="utf-8", errors="ignore")
 
 
-def clone_repo_sandboxed(repo_url: str) -> str:
-    tmpdir = tempfile.TemporaryDirectory(prefix="auditor_repo_")
-    repo_path = Path(tmpdir.name) / "repo"
-
-    code, out, err = _run(["git", "clone", "--depth", "200", repo_url, str(repo_path)])
-    if code != 0:
-        tmpdir.cleanup()
-        raise RuntimeError(f"git clone failed. stdout={out.strip()} stderr={err.strip()}")
-
-    if not hasattr(clone_repo_sandboxed, "_keepers"):
-        clone_repo_sandboxed._keepers = []  # type: ignore[attr-defined]
-    clone_repo_sandboxed._keepers.append(tmpdir)  # type: ignore[attr-defined]
-
-    return str(repo_path)
-
-
-def extract_git_history(repo_path: str) -> List[Evidence]:
-    code, out, err = _run(["git", "-C", repo_path, "log", "--oneline", "--reverse", "--date=iso-strict"])
-    found = code == 0 and out.strip() != ""
-    content = out.strip() if found else (err.strip() or None)
-
-    return [
-        Evidence(
-            goal="git_forensic_analysis",
-            found=found,
-            content=content,
-            location="git log",
-            rationale="Collected git log from cloned repo in sandbox temp directory",
-            confidence=0.9 if found else 0.6,
-        )
-    ]
+def _attr_chain(node: ast.AST) -> Optional[Tuple[str, ...]]:
+    parts: List[str] = []
+    cur = node
+    while isinstance(cur, ast.Attribute):
+        parts.append(cur.attr)
+        cur = cur.value
+    if isinstance(cur, ast.Name):
+        parts.append(cur.id)
+        return tuple(reversed(parts))
+    return None
 
 
 def scan_for_os_system(repo_path: str) -> List[Evidence]:
     root = Path(repo_path)
     tools_dir = root / "src" / "tools"
 
-    hits = []
-    safe_signals = []
+    if not tools_dir.exists():
+        return [
+            Evidence(
+                goal="safe_tool_engineering",
+                found=False,
+                content="src/tools not found",
+                location="src/tools",
+                rationale="Tools directory missing",
+                confidence=0.9,
+            )
+        ]
+
+    unsafe_hits: List[str] = []
+    safe_signals: List[str] = []
+    parse_errors: List[str] = []
 
     for p in tools_dir.rglob("*.py"):
-        s = str(p)
-        if any(x in s for x in ["/.venv/", "/venv/", "__pycache__"]):
+        sp = str(p)
+        if "/.venv/" in sp or "/venv/" in sp or "__pycache__" in sp:
             continue
 
-        txt = p.read_text(encoding="utf-8", errors="ignore")
+        txt = _read_text(p)
+        rel = p.relative_to(root).as_posix()
 
-        if "os.system(" in txt:
-            hits.append(str(p))
+        try:
+            tree = ast.parse(txt)
+        except SyntaxError as e:
+            # Parse errors are not security flaws. Record separately.
+            parse_errors.append(f"{rel}:{getattr(e, 'lineno', 1)}: SyntaxError: {e}")
+            continue
 
-        if "subprocess.run(" in txt:
-            safe_signals.append(f"{p}: uses subprocess.run")
+        class V(ast.NodeVisitor):
+            def visit_Call(self, node: ast.Call) -> None:
+                chain = _attr_chain(node.func)
 
-        if "TemporaryDirectory(" in txt:
-            safe_signals.append(f"{p}: uses TemporaryDirectory")
+                if chain == ("os", "system"):
+                    unsafe_hits.append(
+                        f"{rel}:{getattr(node, 'lineno', 0)}: os.system(...)"
+                    )
 
-    found = False if hits else True
+                if (
+                    chain
+                    and chain[0] == "subprocess"
+                    and chain[1:]
+                    in {
+                        ("run",),
+                        ("Popen",),
+                        ("call",),
+                        ("check_call",),
+                        ("check_output",),
+                    }
+                ):
+                    shell_kw = None
+                    for kw in node.keywords or []:
+                        if kw.arg == "shell":
+                            shell_kw = kw.value
+                            break
 
-    content_lines = []
-    if hits:
-        content_lines.append("Unsafe usage detected:")
-        content_lines.extend(hits)
+                    if (
+                        shell_kw is not None
+                        and isinstance(shell_kw, ast.Constant)
+                        and shell_kw.value is True
+                    ):
+                        unsafe_hits.append(
+                            f"{rel}:{getattr(node, 'lineno', 0)}: subprocess.{chain[-1]}(shell=True)"
+                        )
+
+                if chain == ("tempfile", "TemporaryDirectory"):
+                    safe_signals.append(
+                        f"{rel}:{getattr(node, 'lineno', 0)}: tempfile.TemporaryDirectory"
+                    )
+
+                if chain == ("subprocess", "run"):
+                    shell_true = False
+                    for kw in node.keywords or []:
+                        if (
+                            kw.arg == "shell"
+                            and isinstance(kw.value, ast.Constant)
+                            and kw.value.value is True
+                        ):
+                            shell_true = True
+                            break
+                    if not shell_true:
+                        safe_signals.append(
+                            f"{rel}:{getattr(node, 'lineno', 0)}: subprocess.run(no shell)"
+                        )
+
+                self.generic_visit(node)
+
+        V().visit(tree)
+
+    ok = len(unsafe_hits) == 0
+
+    lines: List[str] = []
+
+    if unsafe_hits:
+        lines.append("Unsafe execution call sites detected:")
+        lines.extend(sorted(set(unsafe_hits))[:500])
     else:
-        content_lines.append("No os.system usage detected.")
+        lines.append("No unsafe execution call sites detected by AST scan.")
+
+    if parse_errors:
+        lines.append("Parse errors (not counted as security flaws):")
+        lines.extend(sorted(set(parse_errors))[:200])
 
     if safe_signals:
-        content_lines.append("Safe signals detected:")
-        content_lines.extend(safe_signals)
+        lines.append("Safe signals detected:")
+        lines.extend(sorted(set(safe_signals))[:500])
+
+    confidence = 0.95 if ok else 0.9
+    if parse_errors and ok:
+        # Slightly reduce confidence if we could not scan some files.
+        confidence = min(confidence, 0.9)
 
     return [
         Evidence(
             goal="safe_tool_engineering",
-            found=found,
-            content="\n".join(content_lines),
+            found=ok,
+            content="\n".join(lines),
             location="src/tools",
-            rationale="Static scan for unsafe shell execution and safe subprocess usage",
-            confidence=0.95 if found else 0.8,
-        )
-    ]
-
-def scan_for_repo_url_in_shell(repo_path: str) -> List[Evidence]:
-    root = Path(repo_path)
-    hits: List[str] = []
-    pattern = re.compile(r"os\.system\(|subprocess\.(run|Popen)\(", re.IGNORECASE)
-
-    for p in root.rglob("*.py"):
-        s = str(p)
-        if "/.venv/" in s or "/venv/" in s or "__pycache__" in s:
-            continue
-        try:
-            txt = p.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
-        if pattern.search(txt):
-            hits.append(str(p))
-
-    return [
-        Evidence(
-            goal="safe_tool_engineering",
-            found=True,
-            content=("Shell execution call sites:\n" + "\n".join(hits[:200])) if hits else "No shell execution call sites detected.",
-            location="repo scan",
-            rationale="Locate command execution surfaces for review",
-            confidence=0.7,
+            rationale="AST scan for os.system and subprocess shell=True. Parse errors recorded separately to avoid false security flags.",
+            confidence=confidence,
         )
     ]

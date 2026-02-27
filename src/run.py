@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -26,32 +27,48 @@ def main() -> None:
     ap.add_argument("--pdf", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--rubric", default="rubric/week2_rubric.json")
-    ap.add_argument("--enable-vision", action="store_true")
+
+    # Enhanced argument parsing for vision flags
+    ap.add_argument("--enable-vision", action="store_true", help="Enable PDF diagram inspection")
+    ap.add_argument("--disable-vision", action="store_true", help="Disable PDF diagram inspection")
     args = ap.parse_args()
 
+    if args.enable_vision and args.disable_vision:
+        raise SystemExit("Pick only one: --enable-vision or --disable-vision")
+
+    enable_vision = True if args.enable_vision else False
+    if args.disable_vision:
+        enable_vision = False
+
     rubric_dimensions = load_rubric_dimensions(args.rubric)
-
-    init_state = {
-        "repo_url": args.repo,
-        "pdf_path": args.pdf,
-        "rubric_dimensions": rubric_dimensions,
-        "enable_vision": bool(args.enable_vision),
-        "evidences": {},
-        "opinions": [],
-        "final_report": None,
-        "final_report_markdown": "",
-    }
-
-    graph = build_graph()
-    out_state = graph.invoke(init_state)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    with tempfile.TemporaryDirectory(prefix="auditor_run_") as workdir:
+        init_state = {
+            "repo_url": args.repo,
+            "pdf_path": args.pdf,
+            "rubric_dimensions": rubric_dimensions,
+            "enable_vision": enable_vision,
+            "workspace_dir": workdir,
+            "evidences": {},
+            "opinions": [],
+            "final_report": None,
+            "final_report_markdown": "",
+        }
+
+        graph = build_graph()
+        out_state = graph.invoke(init_state)
+
     md = out_state.get("final_report_markdown") or ""
+
     if not md:
         fr = out_state.get("final_report")
-        md = fr.model_dump_json(indent=2) if fr is not None else ""
+        if fr is not None:
+            if hasattr(fr, "model_dump"):
+                fr = fr.model_dump()
+            md = json.dumps(fr, indent=2, ensure_ascii=False, default=str)
 
     out_path.write_text(md or "No report generated.", encoding="utf-8")
     print(f"Wrote: {out_path}")

@@ -1,7 +1,8 @@
+# src/nodes/justice.py
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional
 
 from src.state import Evidence, JudicialOpinion
 
@@ -16,36 +17,53 @@ class CriterionVerdict:
     opinions: List[JudicialOpinion]
 
 
-def _rubric_index(rubric_dimensions: List[Dict]) -> Dict[str, Dict]:
-    return {str(d.get("id")): d for d in rubric_dimensions or [] if d.get("id")}
-
-
-def _group_opinions(opinions: List[JudicialOpinion]) -> Dict[str, List[JudicialOpinion]]:
+def _group_opinions(
+    opinions: List[JudicialOpinion],
+) -> Dict[str, List[JudicialOpinion]]:
     grouped: Dict[str, List[JudicialOpinion]] = {}
     for op in opinions or []:
-        grouped.setdefault(op.criterion_id, []).append(op)
+        grouped.setdefault(str(op.criterion_id), []).append(op)
     return grouped
 
 
 def _scores_by_judge(ops: List[JudicialOpinion]) -> Dict[str, int]:
-    return {str(op.judge): int(op.score) for op in ops}
+    allowed = {"Prosecutor", "Defense", "TechLead"}
+    out: Dict[str, int] = {}
+    for op in ops:
+        j = str(op.judge)
+        if j not in allowed:
+            continue
+        try:
+            sc = int(op.score)
+        except Exception:
+            sc = 1
+        if sc < 1:
+            sc = 1
+        if sc > 5:
+            sc = 5
+        out[j] = sc
+    return out
 
 
 def _variance(scores: List[int]) -> int:
-    return max(scores) - min(scores) if scores else 0
-
-
-def _security_flag(text: str) -> bool:
-    t = (text or "").lower()
-    needles = ["os.system", "shell injection", "unsanitized", "raw os.system"]
-    return any(n in t for n in needles)
+    return (max(scores) - min(scores)) if scores else 0
 
 
 def _evidence_missing(evs: List[Evidence]) -> bool:
     return any(e.found is False for e in (evs or []))
 
 
-def _pick_final_score(scores: Dict[str, int]) -> int:
+def _security_signal_true(evidences: Dict[str, List[Evidence]]) -> bool:
+    evs = evidences.get("security_override_signal", []) or []
+    return any(e.found is True for e in evs)
+
+
+def _pick_final_score(scores: Dict[str, int], criterion_id: str) -> int:
+    # Rubric synthesis_rules.functionality_weight
+    if criterion_id == "graph_orchestration" and "TechLead" in scores:
+        return scores["TechLead"]
+
+    # Default priority: TechLead > Prosecutor > Defense
     if "TechLead" in scores:
         return scores["TechLead"]
     if "Prosecutor" in scores:
@@ -55,13 +73,22 @@ def _pick_final_score(scores: Dict[str, int]) -> int:
     return 1
 
 
+def _get_judge_score(ops: List[JudicialOpinion], judge: str) -> Optional[int]:
+    for op in ops or []:
+        if str(op.judge) == judge:
+            try:
+                return int(op.score)
+            except Exception:
+                return None
+    return None
+
+
 def _render_markdown(
     repo_url: str,
     overall_score: float,
     verdicts: List[CriterionVerdict],
     remediation_plan: str,
 ) -> str:
-
     lines: List[str] = []
     lines.append("# Audit Report")
     lines.append("")
@@ -81,11 +108,14 @@ def _render_markdown(
             lines.append(v.dissent_summary)
 
         lines.append("Judge opinions:")
+        if not v.opinions:
+            lines.append("- None")
+
         for op in v.opinions:
             lines.append(f"- {op.judge}: {op.score}/5")
             lines.append(f"  Argument: {op.argument}")
             if op.cited_evidence:
-                lines.append(f"  Cited evidence: {', '.join(op.cited_evidence)}")
+                lines.append("  Cited evidence: " + ", ".join(op.cited_evidence))
 
         lines.append("Remediation:")
         lines.append(v.remediation)
@@ -98,38 +128,52 @@ def _render_markdown(
 
 
 def chief_justice(state: Dict) -> Dict:
+    """
+    Deterministic synthesis with rubric-aligned rules.
 
+    Rule of Security (rubric):
+    - Only cap overall at 3.0 when:
+      1) security_override_signal is true, AND
+      2) Prosecutor score for safe_tool_engineering indicates a confirmed vuln (score <= 3).
+
+    Rule of Evidence:
+    - If any Evidence for a criterion has found=False, cap that criterion score at 2.
+
+    Functionality weight:
+    - For graph_orchestration, TechLead carries highest weight.
+
+    Dissent requirement:
+    - If variance across judge scores > 2, include dissent summary.
+
+    Output:
+    - Structured Markdown report.
+    """
     repo_url = state.get("repo_url", "")
     rubric_dimensions = state.get("rubric_dimensions", []) or []
-    evidences = state.get("evidences", {}) or {}
-    opinions = state.get("opinions", []) or []
+    evidences: Dict[str, List[Evidence]] = state.get("evidences", {}) or {}
+    opinions: List[JudicialOpinion] = state.get("opinions", []) or []
 
-    rubric = _rubric_index(rubric_dimensions)
     grouped = _group_opinions(opinions)
 
     verdicts: List[CriterionVerdict] = []
     per_scores: List[int] = []
 
-    security_issue = False
+    for dim in rubric_dimensions:
+        cid = str(dim.get("id", ""))
+        if not cid:
+            continue
 
-    for cid, ops in grouped.items():
-
-        dim = rubric.get(cid, {})
         name = str(dim.get("name") or cid)
-
+        ops = grouped.get(cid, [])
         scores_map = _scores_by_judge(ops)
         raw_scores = list(scores_map.values())
         var = _variance(raw_scores)
 
-        final_score = _pick_final_score(scores_map)
+        final_score = _pick_final_score(scores_map, cid)
+        evs = evidences.get(cid, []) or []
 
-        evs = evidences.get(cid, [])
         if _evidence_missing(evs):
             final_score = min(final_score, 2)
-
-        prosecutor_op = next((o for o in ops if o.judge == "Prosecutor"), None)
-        if prosecutor_op and _security_flag(prosecutor_op.argument):
-            security_issue = True
 
         dissent = ""
         if var > 2:
@@ -157,23 +201,33 @@ def chief_justice(state: Dict) -> Dict:
                 opinions=ops,
             )
         )
-
         per_scores.append(int(final_score))
 
     overall = (sum(per_scores) / len(per_scores)) if per_scores else 1.0
 
-    if security_issue:
+    # Rubric-aligned security cap: requires both signal and Prosecutor confirmation.
+    security_signal = _security_signal_true(evidences)
+    prosecutor_safe_score = _get_judge_score(
+        grouped.get("safe_tool_engineering", []), "Prosecutor"
+    )
+    prosecutor_confirms = (
+        prosecutor_safe_score is not None and prosecutor_safe_score <= 3
+    )
+
+    if security_signal and prosecutor_confirms:
         overall = min(overall, 3.0)
 
     lowest = sorted(
-        [(v.criterion_name, v.final_score) for v in verdicts],
-        key=lambda x: x[1],
+        [(v.criterion_name, v.final_score) for v in verdicts], key=lambda x: x[1]
     )
 
-    remediation_lines = ["Fix lowest scores first."]
+    remediation_lines: List[str] = ["Fix lowest scores first."]
     for name, score in lowest[:5]:
         remediation_lines.append(f"- {name} score={score}")
 
     md = _render_markdown(repo_url, overall, verdicts, "\n".join(remediation_lines))
 
-    return {"final_report_markdown": md, "final_report": {"overall_score": overall}}
+    return {
+        "final_report_markdown": md,
+        "final_report": {"overall_score": overall},
+    }
