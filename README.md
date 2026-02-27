@@ -138,6 +138,27 @@ Generated reports are written under:
 - [audit/report_onpeer_generated](audit/report_onpeer_generated)
 - [audit/archive](audit/archive)
 
+## LangSmith evidence checklist
+
+Use this checklist to show completed tracing history in submissions:
+
+1. Open https://smith.langchain.com and navigate to your project (`automation-audit`).
+2. Filter runs by status `Success/Completed` and recent date range.
+3. Capture one run trace showing full graph execution (detectives, judges, chief justice).
+4. Include these proof items:
+  - Project URL
+  - One or more run URLs
+  - Total run count and completed run count
+  - Latest run timestamp
+
+Required env settings for tracing:
+
+```bash
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=<your_key>
+LANGSMITH_PROJECT=automation-auditor
+```
+
 ## Rubric model
 
 Rubric definitions are loaded from [rubric/week2_rubric.json](rubric/week2_rubric.json).
