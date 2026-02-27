@@ -4,3 +4,4 @@ pycache/
 *.pyc
 uv.lock
 reports/
+.langgraph_api

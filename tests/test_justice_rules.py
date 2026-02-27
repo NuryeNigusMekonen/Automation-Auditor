@@ -152,3 +152,120 @@ def test_security_cap_applies_only_with_signal_and_prosecutor_confirmation() -> 
 
     assert out_with["final_report"]["overall_score"] <= 3.0
     assert out_without["final_report"]["overall_score"] > 3.0
+
+
+def test_fact_supremacy_overrules_high_defense_when_evidence_missing() -> None:
+    state = {
+        "repo_url": "https://github.com/example/repo",
+        "rubric_dimensions": _dims(),
+        "evidences": {
+            "safe_tool_engineering": [
+                Evidence(
+                    goal="safe_tool_engineering",
+                    found=False,
+                    content="unsafe",
+                    location="src/tools",
+                    rationale="scanner",
+                    confidence=0.9,
+                )
+            ],
+            "graph_orchestration": [
+                Evidence(
+                    goal="graph_orchestration",
+                    found=True,
+                    content="ok",
+                    location="src/graph.py",
+                    rationale="ok",
+                    confidence=0.9,
+                )
+            ],
+        },
+        "opinions": [
+            JudicialOpinion(
+                judge="Defense",
+                criterion_id="safe_tool_engineering",
+                score=5,
+                argument="effort and intent",
+                cited_evidence=["src/tools"],
+            ),
+            JudicialOpinion(
+                judge="Prosecutor",
+                criterion_id="safe_tool_engineering",
+                score=1,
+                argument="risk",
+                cited_evidence=["src/tools"],
+            ),
+            JudicialOpinion(
+                judge="TechLead",
+                criterion_id="safe_tool_engineering",
+                score=3,
+                argument="maintainability",
+                cited_evidence=["src/tools"],
+            ),
+        ],
+    }
+
+    out = chief_justice(state)
+    md = out["final_report_markdown"]
+
+    assert "Final score: 2 / 5" in md
+    assert "Fact supremacy applied" in md
+
+
+def test_variance_re_evaluation_uses_techlead_for_graph_orchestration() -> None:
+    state = {
+        "repo_url": "https://github.com/example/repo",
+        "rubric_dimensions": _dims(),
+        "evidences": {
+            "safe_tool_engineering": [
+                Evidence(
+                    goal="safe_tool_engineering",
+                    found=True,
+                    content="clean",
+                    location="src/tools",
+                    rationale="scanner",
+                    confidence=0.9,
+                )
+            ],
+            "graph_orchestration": [
+                Evidence(
+                    goal="graph_orchestration",
+                    found=True,
+                    content="ok",
+                    location="src/graph.py",
+                    rationale="ok",
+                    confidence=0.9,
+                )
+            ],
+        },
+        "opinions": [
+            JudicialOpinion(
+                judge="Prosecutor",
+                criterion_id="graph_orchestration",
+                score=1,
+                argument="risk",
+                cited_evidence=["src/graph.py"],
+            ),
+            JudicialOpinion(
+                judge="Defense",
+                criterion_id="graph_orchestration",
+                score=5,
+                argument="effort",
+                cited_evidence=["src/graph.py"],
+            ),
+            JudicialOpinion(
+                judge="TechLead",
+                criterion_id="graph_orchestration",
+                score=3,
+                argument="maintainability",
+                cited_evidence=["src/graph.py"],
+            ),
+        ],
+    }
+
+    out = chief_justice(state)
+    md = out["final_report_markdown"]
+
+    assert "### Graph Orchestration (graph_orchestration)" in md
+    assert "Final score: 3 / 5" in md
+    assert "Variance re-evaluation: graph orchestration follows TechLead functionality weighting." in md

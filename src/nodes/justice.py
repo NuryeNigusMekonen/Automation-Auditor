@@ -73,6 +73,61 @@ def _pick_final_score(scores: Dict[str, int], criterion_id: str) -> int:
     return 1
 
 
+def _apply_fact_supremacy(
+    final_score: int,
+    scores: Dict[str, int],
+    evs: List[Evidence],
+) -> tuple[int, str]:
+    if not _evidence_missing(evs):
+        return final_score, ""
+
+    updated = min(int(final_score), 2)
+    defense_score = scores.get("Defense")
+    if defense_score is not None and defense_score >= 4:
+        return (
+            updated,
+            "Fact supremacy applied: defense optimism was overruled by negative/missing evidence.",
+        )
+
+    return (
+        updated,
+        "Fact supremacy applied: negative/missing evidence capped criterion score.",
+    )
+
+
+def _re_evaluate_high_variance(
+    final_score: int,
+    scores: Dict[str, int],
+    evs: List[Evidence],
+    criterion_id: str,
+) -> tuple[int, str]:
+    updated = int(final_score)
+
+    if _evidence_missing(evs):
+        updated = min(updated, 2)
+        return (
+            updated,
+            "Variance re-evaluation: conflicting opinions resolved conservatively due to negative/missing evidence.",
+        )
+
+    if criterion_id == "graph_orchestration" and "TechLead" in scores:
+        updated = int(scores["TechLead"])
+        return (
+            updated,
+            "Variance re-evaluation: graph orchestration follows TechLead functionality weighting.",
+        )
+
+    if scores:
+        avg = round(sum(scores.values()) / len(scores))
+        updated = max(1, min(5, int(avg)))
+        return (
+            updated,
+            "Variance re-evaluation: used rounded inter-judge mean after tie-break review.",
+        )
+
+    return updated, "Variance re-evaluation: insufficient judge scores; kept baseline score."
+
+
 def _get_judge_score(ops: List[JudicialOpinion], judge: str) -> Optional[int]:
     for op in ops or []:
         if str(op.judge) == judge:
@@ -172,18 +227,28 @@ def chief_justice(state: Dict) -> Dict:
         final_score = _pick_final_score(scores_map, cid)
         evs = evidences.get(cid, []) or []
 
-        if _evidence_missing(evs):
-            final_score = min(final_score, 2)
+        fact_note = ""
+        final_score, fact_note = _apply_fact_supremacy(final_score, scores_map, evs)
 
         dissent = ""
         if var > 2:
+            final_score, reeval_note = _re_evaluate_high_variance(
+                final_score,
+                scores_map,
+                evs,
+                cid,
+            )
             dissent = (
                 f"Variance {var}. "
                 f"Prosecutor={scores_map.get('Prosecutor')}, "
                 f"Defense={scores_map.get('Defense')}, "
                 f"TechLead={scores_map.get('TechLead')}. "
-                "Final score follows priority rules."
+                f"{reeval_note}"
             )
+            if fact_note:
+                dissent = dissent + " " + fact_note
+        elif fact_note:
+            dissent = fact_note
 
         remediation = str(
             dim.get("failure_pattern")

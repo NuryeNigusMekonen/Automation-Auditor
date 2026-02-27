@@ -1,0 +1,10 @@
+{
+"dependencies": [
+"."
+],
+"graphs": {
+"auditor": {
+"path": "src.graph:build_graph"
+}
+}
+}
