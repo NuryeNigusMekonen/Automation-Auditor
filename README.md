@@ -131,6 +131,38 @@ Detectives (Parallel Fan-Out)
 
 This ensures architectural rigor and prevents linear single-prompt grading.
 
+### Execution Diagram
+
+```mermaid
+flowchart TD
+  S([START])
+
+  S --> RI[repo_investigator]
+  S --> DA[doc_analyst]
+  S --> VI[vision_inspector]
+
+  RI --> EA[evidence_aggregator]
+  DA --> EA
+  VI --> EA
+
+  EA --> OG[orchestration_guard]
+
+  OG -->|guard failed| AB[abort]
+  AB --> CJ[chief_justice]
+
+  OG -->|guard passed| JD[judges_dispatch]
+  JD --> PR[prosecutor]
+  JD --> DE[defense]
+  JD --> TL[tech_lead]
+
+  PR --> OA[opinions_aggregator]
+  DE --> OA
+  TL --> OA
+
+  OA --> CJ
+  CJ --> E([END])
+```
+
 ---
 
 ## Installation
