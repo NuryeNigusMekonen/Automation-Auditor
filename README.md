@@ -234,6 +234,73 @@ AUDITOR_CAP_EVIDENCE_ITEMS=60
 
 ---
 
+## Production Operations
+
+### Required Environment Variables
+
+Set these in your deployment environment:
+
+```bash
+OPENAI_API_KEY=<required>
+OPENAI_MODEL=gpt-4o-mini
+```
+
+Optional operational controls:
+
+```bash
+AUDITOR_OFFLINE_MODE=false
+AUDITOR_CAP_REPORT_PATHS=2000
+AUDITOR_CAP_ALLOWED_CITATIONS=50
+AUDITOR_CAP_EVIDENCE_ITEMS=80
+```
+
+### Runtime Packaging and Startup
+
+Container runtime includes:
+
+* Pinned Python runtime image (`python:3.12.8-slim-bookworm`)
+* Non-root execution user (`appuser`)
+* Healthcheck (`python -m src.run --help`)
+* Startup smoke command in container entrypoint before launching requested args
+
+### SLO Targets
+
+Recommended baseline SLOs:
+
+* Availability: 99.5% monthly for audit execution endpoint/job runner
+* Successful run rate: >= 98% of scheduled/on-demand audits
+* P95 audit completion latency: <= 5 minutes for standard rubric + medium repo
+* False-start rate (startup/config failures): < 1%
+
+### Common Failure Modes
+
+Typical production failure classes:
+
+* Missing or invalid env vars (e.g., `OPENAI_API_KEY` absent)
+* Rubric schema validation failure (missing required keys)
+* External dependency failure (GitHub clone/network/LLM API timeout)
+* Input artifact issues (missing PDF, unreadable PDF, malformed repo URL)
+* Rate limiting or quota exhaustion from model provider
+
+### Incident Response Steps
+
+Use this runbook for first response:
+
+1. Confirm deployment health (`docker ps`, health status, CI status).
+2. Check startup smoke output and application logs for configuration errors.
+3. Validate critical env vars and rubric file integrity.
+4. Re-run failing command in deterministic mode for triage:
+
+  ```bash
+  uv run python -m src.run --repo <repo> --pdf <pdf> --out <out> --offline
+  ```
+
+5. If offline succeeds but online fails, treat as external/API incident (provider or network).
+6. If both fail, isolate to local parsing/schema/runtime logic and roll back to previous known-good commit if needed.
+7. Document impact, timeline, root cause, and corrective action in post-incident notes.
+
+---
+
 ## Future Improvements
 
 * Add CI integration for automated PR auditing
