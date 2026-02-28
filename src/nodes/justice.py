@@ -143,6 +143,7 @@ def _render_markdown(
     overall_score: float,
     verdicts: List[CriterionVerdict],
     remediation_plan: str,
+    executive_details: str,
 ) -> str:
     lines: List[str] = []
     lines.append("# Audit Report")
@@ -150,6 +151,8 @@ def _render_markdown(
     lines.append("## Executive Summary")
     lines.append(f"Repo: {repo_url}")
     lines.append(f"Overall score: {overall_score:.2f} / 5.00")
+    if executive_details:
+        lines.append(executive_details)
     lines.append("")
     lines.append("## Criterion Breakdown")
 
@@ -285,12 +288,44 @@ def chief_justice(state: Dict) -> Dict:
     lowest = sorted(
         [(v.criterion_name, v.final_score) for v in verdicts], key=lambda x: x[1]
     )
+    highest = sorted(
+        [(v.criterion_name, v.final_score) for v in verdicts], key=lambda x: x[1], reverse=True
+    )
+
+    dissent_count = sum(1 for v in verdicts if bool(v.dissent_summary))
+    low_count = sum(1 for _, score in lowest if score <= 3)
+
+    executive_lines: List[str] = []
+    executive_lines.append(f"Criteria evaluated: {len(verdicts)}")
+    executive_lines.append(f"Dissent-triggered criteria: {dissent_count}")
+    executive_lines.append(
+        f"Security override applied: {'yes' if (security_signal and prosecutor_confirms) else 'no'}"
+    )
+
+    executive_lines.append("Top strengths:")
+    for name, score in highest[:3]:
+        executive_lines.append(f"- {name}: {score}/5")
+
+    executive_lines.append("Highest-risk criteria:")
+    if low_count == 0:
+        executive_lines.append("- None (all criteria above 3/5)")
+    else:
+        for name, score in lowest[:3]:
+            if score <= 3:
+                executive_lines.append(f"- {name}: {score}/5")
 
     remediation_lines: List[str] = ["Fix lowest scores first."]
-    for name, score in lowest[:5]:
-        remediation_lines.append(f"- {name} score={score}")
+    for verdict in sorted(verdicts, key=lambda v: v.final_score)[:5]:
+        remediation_lines.append(f"- {verdict.criterion_name} score={verdict.final_score}")
+        remediation_lines.append(f"  Action: {verdict.remediation}")
 
-    md = _render_markdown(repo_url, overall, verdicts, "\n".join(remediation_lines))
+    md = _render_markdown(
+        repo_url,
+        overall,
+        verdicts,
+        "\n".join(remediation_lines),
+        "\n".join(executive_lines),
+    )
 
     return {
         "final_report_markdown": md,

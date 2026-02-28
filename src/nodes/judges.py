@@ -96,6 +96,38 @@ def _sanitize_citations(cited: List[str], allowed: List[str]) -> List[str]:
     return kept[:CAP_CITED_EVIDENCE]
 
 
+def _normalize_citations_for_criterion(
+    criterion_id: str,
+    cited: List[str],
+    allowed: List[str],
+) -> List[str]:
+    if not cited:
+        return []
+
+    preferred_prefixes: Dict[str, Tuple[str, ...]] = {
+        "structured_output_enforcement": ("src/nodes/judges.py",),
+        "judicial_nuance": ("src/nodes/judges.py",),
+        "chief_justice_synthesis": ("src/nodes/justice.py",),
+        "graph_orchestration": ("src/graph.py",),
+        "state_management_rigor": ("src/state.py",),
+        "safe_tool_engineering": ("src/tools",),
+    }
+
+    prefixes = preferred_prefixes.get(criterion_id)
+    if not prefixes:
+        return cited[:CAP_CITED_EVIDENCE]
+
+    narrowed = [c for c in cited if c.startswith(prefixes)]
+    if narrowed:
+        return narrowed[:CAP_CITED_EVIDENCE]
+
+    fallback = [a for a in allowed if a.startswith(prefixes)]
+    if fallback:
+        return fallback[:1]
+
+    return cited[:CAP_CITED_EVIDENCE]
+
+
 def _offline_judicial_opinion(
     role: str,
     criterion_id: str,
@@ -261,6 +293,11 @@ def _run_judge(
         op.judge = role
         op.criterion_id = cid
         op.cited_evidence = _sanitize_citations(op.cited_evidence, allowed)
+        op.cited_evidence = _normalize_citations_for_criterion(
+            cid,
+            op.cited_evidence,
+            allowed,
+        )
 
         if allowed and not op.cited_evidence:
             pick = allowed[0]

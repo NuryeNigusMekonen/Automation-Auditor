@@ -5,3 +5,4 @@ pycache/
 uv.lock
 reports/
 .langgraph_api
+logs/
