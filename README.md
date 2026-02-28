@@ -157,6 +157,7 @@ Required env settings for tracing:
 LANGSMITH_TRACING=true
 LANGSMITH_API_KEY=<your_key>
 LANGSMITH_PROJECT=automation-auditor
+
 ```
 
 ## Rubric model
@@ -164,6 +165,25 @@ LANGSMITH_PROJECT=automation-auditor
 Rubric definitions are loaded from [rubric/week2_rubric.json](rubric/week2_rubric.json).
 
 Validation enforces required dimension and synthesis-rule keys before execution, preventing malformed policy files from entering the pipeline.
+
+## to run customer evaluation other than self and peer use
+
+make audit REPO="https://github.com/caumente/AUDIT.git" PDF="./reports/week2_takeaway.pdf" OUT="./audit/custom/random.md" RUBRIC="./rubric/week2_rubric.json" ENABLE_VISION=1
+
+for self evaluation make self_audit
+for peer generation make peer_audit
+
+for logging 
+
+Auto log file path: make self_audit VERBOSE=1
+Custom log file path: make self_audit VERBOSE=1 LOG_FILE=./audit/logs/self_audit_verbose.log
+
+same pattern 
+
+Self audit: make self_audit VERBOSE=1
+Peer audit: make peer_audit VERBOSE=1
+Custom audit (generic target):
+make audit REPO="<repo_url>" PDF="./reports/week2_takeaway.pdf" OUT="./audit/custom/my_run.md" VERBOSE=1
 
 ## Production operations
 

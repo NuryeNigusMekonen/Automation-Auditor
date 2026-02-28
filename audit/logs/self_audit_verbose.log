@@ -1,0 +1,25 @@
+[2026-02-28T16:08:08Z] [RUN] Starting pipeline repo=https://github.com/NuryeNigusMekonen/Automation-Auditor.git pdf=./reports/week2_takeaway.pdf vision=True offline=False
+[2026-02-28T16:08:08Z] [RUN] Logging to ./audit/logs/self_audit_verbose.log
+[2026-02-28T16:08:08Z] [STEP] doc_analyst: start
+[2026-02-28T16:08:08Z] [STEP] vision_inspector: start
+[2026-02-28T16:08:08Z] [STEP] repo_investigator: start
+[2026-02-28T16:08:09Z] [STEP] doc_analyst: done -> keys=[evidences] (evidences=6)
+[2026-02-28T16:08:09Z] [STEP] vision_inspector: done -> keys=[evidences] (evidences=1)
+[2026-02-28T16:08:12Z] [STEP] repo_investigator: done -> keys=[evidences] (evidences=9)
+[2026-02-28T16:08:12Z] [STEP] evidence_aggregator: start
+[2026-02-28T16:08:12Z] [STEP] evidence_aggregator: done -> keys=[evidences] (evidences=16)
+[2026-02-28T16:08:12Z] [STEP] orchestration_guard: start
+[2026-02-28T16:08:12Z] [STEP] orchestration_guard: done -> keys=[]
+[2026-02-28T16:08:12Z] [STEP] judges_dispatch: start
+[2026-02-28T16:08:12Z] [STEP] judges_dispatch: done -> keys=[]
+[2026-02-28T16:08:12Z] [STEP] prosecutor: start
+[2026-02-28T16:08:12Z] [STEP] defense: start
+[2026-02-28T16:08:12Z] [STEP] tech_lead: start
+[2026-02-28T16:08:40Z] [STEP] defense: done -> keys=[evidences, opinions] (evidences=10, opinions=10)
+[2026-02-28T16:08:54Z] [STEP] prosecutor: done -> keys=[evidences, opinions] (evidences=10, opinions=10)
+[2026-02-28T16:08:54Z] [STEP] tech_lead: done -> keys=[evidences, opinions] (evidences=10, opinions=10)
+[2026-02-28T16:08:54Z] [STEP] opinions_aggregator: start
+[2026-02-28T16:08:54Z] [STEP] opinions_aggregator: done -> keys=[evidences] (evidences=1)
+[2026-02-28T16:08:54Z] [STEP] chief_justice: start
+[2026-02-28T16:08:54Z] [STEP] chief_justice: done -> keys=[final_report, final_report_markdown]
+[2026-02-28T16:08:54Z] [RUN] Wrote report: audit/report_onself_generated/self_audit_run.md

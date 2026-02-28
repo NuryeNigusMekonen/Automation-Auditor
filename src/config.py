@@ -60,6 +60,8 @@ def _parse_env_int(
 class RuntimeConfig(BaseModel):
     enable_vision: bool
     offline_mode: bool
+    verbose_logging: bool = False
+    log_file_path: str | None = None
 
     cap_locations: int = Field(ge=1, le=2000)
     cap_report_paths: int = Field(ge=1, le=50000)
@@ -72,10 +74,20 @@ class RuntimeConfig(BaseModel):
     cap_evidence_items: int = Field(ge=1, le=5000)
 
     @classmethod
-    def from_sources(cls, *, enable_vision: bool, offline_mode: bool) -> "RuntimeConfig":
+    def from_sources(
+        cls,
+        *,
+        enable_vision: bool,
+        offline_mode: bool,
+        verbose_logging: bool = False,
+        log_file_path: str | None = None,
+    ) -> "RuntimeConfig":
         return cls(
             enable_vision=enable_vision,
             offline_mode=offline_mode or _parse_env_bool("AUDITOR_OFFLINE_MODE", False),
+            verbose_logging=verbose_logging
+            or _parse_env_bool("AUDITOR_VERBOSE_LOGGING", False),
+            log_file_path=log_file_path or os.getenv("AUDITOR_LOG_FILE"),
             cap_locations=_parse_env_int("AUDITOR_CAP_LOCATIONS", 50, max_value=2000),
             cap_report_paths=_parse_env_int(
                 "AUDITOR_CAP_REPORT_PATHS", 2000, max_value=50000

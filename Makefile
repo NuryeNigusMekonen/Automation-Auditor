@@ -13,6 +13,8 @@ PDF  ?= ./reports/week2_takeaway.pdf
 OUT  ?= ./audit/report_onself_generated/self_audit_run.md
 RUBRIC ?= rubric/week2_rubric.json
 ENABLE_VISION ?= 1
+VERBOSE ?= 0
+LOG_FILE ?=
 
 audit:
 	set -a; [ -f .env ] && source .env; set +a; \
@@ -21,6 +23,8 @@ audit:
 		--pdf "$(PDF)" \
 		--out "$(OUT)" \
 		--rubric "$(RUBRIC)" \
+		$(if $(filter 1 true TRUE yes YES,$(VERBOSE)),--verbose,) \
+		$(if $(strip $(LOG_FILE)),--log-file "$(LOG_FILE)",) \
 		$(if $(filter 1 true TRUE yes YES,$(ENABLE_VISION)),--enable-vision,)
 
 self_audit:
@@ -28,12 +32,14 @@ self_audit:
 		REPO="https://github.com/NuryeNigusMekonen/Automation-Auditor.git" \
 		PDF="./reports/week2_takeaway.pdf" \
 		OUT="./audit/report_onself_generated/self_audit_run.md"
+	@cp ./audit/report_onself_generated/self_audit_run.md ./audit/report_onself_generated/self_audit.md
 
 peer_audit:
 	$(MAKE) audit \
 		REPO="https://github.com/habeshacoder/Automaton-Auditor.git" \
 		PDF="./reports/week2_takeaway.pdf" \
 		OUT="./audit/report_onpeer_generated/habesha_audit_from_run.md"
+	@cp ./audit/report_onpeer_generated/habesha_audit_from_run.md ./audit/report_onpeer_generated/habesha_audit.md
 
 self_audit_archive:
 	$(MAKE) self_audit
