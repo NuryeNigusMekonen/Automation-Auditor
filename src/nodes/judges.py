@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Dict, List, Set, Tuple
 
 from langchain_openai import ChatOpenAI
@@ -32,6 +33,73 @@ def _runtime_cap(state: AgentState, key: str, default: int) -> int:
         if isinstance(value, int) and value > 0:
             return value
     return default
+
+
+def _is_affirmative_security_claim(argument: str) -> bool:
+    arg_low = (argument or "").lower()
+    if not arg_low:
+        return False
+
+    negated_patterns = (
+        "no confirmed security flaw",
+        "no confirmed security flaws",
+        "no confirmed security vulnerability",
+        "no confirmed security vulnerabilities",
+        "no evidence of confirmed security flaw",
+        "no evidence of confirmed security flaws",
+        "no evidence of confirmed security vulnerability",
+        "no evidence of confirmed security vulnerabilities",
+        "without confirmed security flaw",
+        "without confirmed security flaws",
+        "without confirmed security vulnerability",
+        "without confirmed security vulnerabilities",
+        "not a confirmed security flaw",
+        "not a confirmed security vulnerability",
+    )
+
+    if any(p in arg_low for p in negated_patterns):
+        return False
+
+    if re.search(
+        r"\b(no|not|without)\b[^\n\r\.]{0,80}\bconfirmed security (flaw|flaws|vulnerability|vulnerabilities)\b",
+        arg_low,
+    ):
+        return False
+
+    if re.search(
+        r"\bno evidence of\b[^\n\r\.]{0,80}\b(a\s+)?confirmed security (flaw|flaws|vulnerability|vulnerabilities)\b",
+        arg_low,
+    ):
+        return False
+
+    if re.search(
+        r"\babsence of evidence (for|of)\b[^\n\r\.]{0,80}\b(a\s+)?confirmed security (flaw|flaws|vulnerability|vulnerabilities)\b",
+        arg_low,
+    ):
+        return False
+
+    if re.search(
+        r"\babsence of\b[^\n\r\.]{0,40}\b(any\s+)?confirmed security (flaw|flaws|vulnerability|vulnerabilities)\b",
+        arg_low,
+    ):
+        return False
+
+    if (
+        "security_override_signal=false" in arg_low
+        or "security_override_signal is false" in arg_low
+    ):
+        return False
+
+    if re.search(
+        r"\bconfirmed security (flaw|flaws|vulnerability|vulnerabilities)\b",
+        arg_low,
+    ):
+        return True
+
+    if "security_override_signal" in arg_low and "false" not in arg_low:
+        return True
+
+    return False
 
 
 def _judge_llm() -> ChatOpenAI:
@@ -325,21 +393,9 @@ def _run_judge(
             )
 
         # Enforce the security-confirmed rule at output time too.
-        # Only penalize affirmative claims, not denials like "no confirmed security flaw".
-        arg_low = (op.argument or "").lower()
-
-        # Only penalize affirmative claims.
-        # Do not penalize sentences like "no confirmed security flaw".
-        affirmative = False
-        if "confirmed security vulnerability" in arg_low:
-            affirmative = True
-        if (
-            "confirmed security flaw" in arg_low
-            and "no confirmed security flaw" not in arg_low
-        ):
-            affirmative = True
-        if "security_override_signal" in arg_low and "false" not in arg_low:
-            affirmative = True
+        # Only penalize affirmative claims, not denials like
+        # "no evidence of confirmed security flaws".
+        affirmative = _is_affirmative_security_claim(op.argument or "")
 
         if affirmative and not security_confirmed:
             op.score = min(int(op.score), 2)

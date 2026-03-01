@@ -1,175 +1,96 @@
-# Audit Report
+## Architecture Node Contracts (Start to End)
 
-## Executive Summary
-Repo: /home/nurye/Desktop/TRP1/week2/Automation-Auditor
-Overall score: 2.00 / 5.00
+Node contract format: Before -> Logic -> Decision -> After -> Next.
 
-## Criterion Breakdown
+### 1) repo_investigator
+- Before: repo_url, workspace_dir, rubric dimensions.
+- Logic: clone repo safely; collect git history, graph AST, state-model, security, and file-index evidence.
+- Decision: clone failure emits found=False evidence instead of crashing.
+- After: emits git_forensic_analysis, graph_orchestration, state_management_rigor, safe_tool_engineering, repo_file_index.
+- Next: evidence_aggregator.
 
-### Git Forensic Analysis (git_forensic_analysis)
-Final score: 2 / 5
-Dissent:
-Fact supremacy applied: negative/missing evidence capped criterion score.
-Judge opinions:
-- Defense: 2/5
-  Argument: effort: offline deterministic evaluation for git_forensic_analysis. evidence_items=2 any_negative=True.
-  Cited evidence: git clone
-- Prosecutor: 2/5
-  Argument: risk: offline deterministic evaluation for git_forensic_analysis. evidence_items=2 any_negative=True.
-  Cited evidence: git clone
-- TechLead: 2/5
-  Argument: maintainability: offline deterministic evaluation for git_forensic_analysis. evidence_items=2 any_negative=True.
-  Cited evidence: git clone
-Remediation:
-Single 'init' commit or bulk upload of all code at once. No iterative development visible. Timestamps clustered within minutes.
+### 2) doc_analyst
+- Before: pdf_path.
+- Logic: parse PDF and extract theoretical/report-accuracy evidence.
+- Decision: PDF failure emits negative documentation evidence.
+- After: emits theoretical_depth/report_accuracy bundles.
+- Next: evidence_aggregator.
 
-### State Management Rigor (state_management_rigor)
-Final score: 2 / 5
-Dissent:
-Fact supremacy applied: negative/missing evidence capped criterion score.
-Judge opinions:
-- Defense: 2/5
-  Argument: effort: offline deterministic evaluation for state_management_rigor. evidence_items=2 any_negative=True.
-  Cited evidence: repo
-- Prosecutor: 2/5
-  Argument: risk: offline deterministic evaluation for state_management_rigor. evidence_items=2 any_negative=True.
-  Cited evidence: repo
-- TechLead: 2/5
-  Argument: maintainability: offline deterministic evaluation for state_management_rigor. evidence_items=2 any_negative=True.
-  Cited evidence: repo
-Remediation:
-Plain Python dicts used for state. No Pydantic models. No reducers, meaning parallel agents will overwrite each other's data.
+### 3) vision_inspector
+- Before: pdf_path, enable_vision.
+- Logic: analyze diagrams/images for architecture signals.
+- Decision: disabled/unavailable vision emits fallback evidence.
+- After: emits swarm_visual evidence.
+- Next: evidence_aggregator.
 
-### Graph Orchestration Architecture (graph_orchestration)
-Final score: 2 / 5
-Dissent:
-Fact supremacy applied: negative/missing evidence capped criterion score.
-Judge opinions:
-- Defense: 2/5
-  Argument: effort: offline deterministic evaluation for graph_orchestration. evidence_items=2 any_negative=True.
-  Cited evidence: repo
-- Prosecutor: 2/5
-  Argument: risk: offline deterministic evaluation for graph_orchestration. evidence_items=2 any_negative=True.
-  Cited evidence: repo
-- TechLead: 2/5
-  Argument: maintainability: offline deterministic evaluation for graph_orchestration. evidence_items=2 any_negative=True.
-  Cited evidence: repo
-Remediation:
-Purely linear flow (RepoInvestigator -> DocAnalyst -> Judge -> End). No parallel branches. No synchronization node. No conditional edges for error handling.
+### 4) evidence_aggregator
+- Before: merged detective evidence map.
+- Logic: normalize/enrich evidence (citation_pool, cross-reference, consistency, security_override_signal).
+- Decision: security signal is deterministic from unsafe-hit markers.
+- After: emits enriched evidence patch.
+- Next: orchestration_guard.
 
-### Safe Tool Engineering (safe_tool_engineering)
-Final score: 2 / 5
-Dissent:
-Fact supremacy applied: negative/missing evidence capped criterion score.
-Judge opinions:
-- Defense: 2/5
-  Argument: effort: offline deterministic evaluation for safe_tool_engineering. evidence_items=2 any_negative=True.
-  Cited evidence: repo
-- Prosecutor: 2/5
-  Argument: risk: offline deterministic evaluation for safe_tool_engineering. evidence_items=2 any_negative=True.
-  Cited evidence: repo
-- TechLead: 2/5
-  Argument: maintainability: offline deterministic evaluation for safe_tool_engineering. evidence_items=2 any_negative=True.
-  Cited evidence: repo
-Remediation:
-Raw 'os.system("git clone <url>")' drops code into the live working directory. No error handling around shell commands. No input sanitization on the repo URL.
+### 5) orchestration_guard
+- Before: aggregated evidences.
+- Logic: check required key presence (git_forensic_analysis, graph_orchestration).
+- Decision: missing key => fail; key present with found=False => pass.
+- After: either orchestration_guard failure evidence or empty patch.
+- Next: abort or judges_dispatch.
 
-### Structured Output Enforcement (structured_output_enforcement)
-Final score: 2 / 5
-Judge opinions:
-- Defense: 2/5
-  Argument: effort: offline deterministic evaluation for structured_output_enforcement. evidence_items=1 any_negative=True.
-  Cited evidence: src/tools
-- Prosecutor: 2/5
-  Argument: risk: offline deterministic evaluation for structured_output_enforcement. evidence_items=1 any_negative=True.
-  Cited evidence: src/tools
-- TechLead: 2/5
-  Argument: maintainability: offline deterministic evaluation for structured_output_enforcement. evidence_items=1 any_negative=True.
-  Cited evidence: src/tools
-Remediation:
-Judge nodes call LLMs with plain prompts and parse freeform text responses. No Pydantic validation on output. No retry on parse failure.
+### 6) abort
+- Before: guard-failed path only.
+- Logic: write explicit guard-failure evidence.
+- Decision: none.
+- After: emits orchestration_guard trace evidence.
+- Next: chief_justice.
 
-### Judicial Nuance and Dialectics (judicial_nuance)
-Final score: 2 / 5
-Judge opinions:
-- Defense: 2/5
-  Argument: effort: offline deterministic evaluation for judicial_nuance. evidence_items=1 any_negative=True.
-  Cited evidence: src/tools
-- Prosecutor: 2/5
-  Argument: risk: offline deterministic evaluation for judicial_nuance. evidence_items=1 any_negative=True.
-  Cited evidence: src/tools
-- TechLead: 2/5
-  Argument: maintainability: offline deterministic evaluation for judicial_nuance. evidence_items=1 any_negative=True.
-  Cited evidence: src/tools
-Remediation:
-Single agent acts as 'The Grader' with no persona separation. Or three judges exist but share 90% of prompt text, producing near-identical outputs. Scores are random or purely praise/criticism without nuance.
+### 7) judges_dispatch
+- Before: guard-passed path only.
+- Logic: routing fan-out to judges.
+- Decision: none.
+- After: routing-only handoff.
+- Next: prosecutor, defense, tech_lead (parallel).
 
-### Chief Justice Synthesis Engine (chief_justice_synthesis)
-Final score: 2 / 5
-Judge opinions:
-- Defense: 2/5
-  Argument: effort: offline deterministic evaluation for chief_justice_synthesis. evidence_items=1 any_negative=True.
-  Cited evidence: src/tools
-- Prosecutor: 2/5
-  Argument: risk: offline deterministic evaluation for chief_justice_synthesis. evidence_items=1 any_negative=True.
-  Cited evidence: src/tools
-- TechLead: 2/5
-  Argument: maintainability: offline deterministic evaluation for chief_justice_synthesis. evidence_items=1 any_negative=True.
-  Cited evidence: src/tools
-Remediation:
-ChiefJustice is just another LLM prompt that averages the three judge scores. No hardcoded rules. No dissent summary. Output is console text or unstructured.
+### 8) prosecutor
+- Before: criterion + evidence bundle.
+- Logic: adversarial risk-focused scoring.
+- Decision: structured-output retry path on malformed responses.
+- After: emits JudicialOpinion(Prosecutor).
+- Next: opinions_aggregator.
 
-### Theoretical Depth (Documentation) (theoretical_depth)
-Final score: 2 / 5
-Judge opinions:
-- Defense: 2/5
-  Argument: effort: offline deterministic evaluation for theoretical_depth. evidence_items=2 any_negative=True.
-  Cited evidence: pdf
-- Prosecutor: 2/5
-  Argument: risk: offline deterministic evaluation for theoretical_depth. evidence_items=2 any_negative=True.
-  Cited evidence: pdf
-- TechLead: 2/5
-  Argument: maintainability: offline deterministic evaluation for theoretical_depth. evidence_items=2 any_negative=True.
-  Cited evidence: pdf
-Remediation:
-Terms appear only in the executive summary or introduction. No connection to actual implementation. 'We used Dialectical Synthesis' with no explanation of how.
+### 9) defense
+- Before: criterion + evidence bundle.
+- Logic: effort/intent-aware scoring.
+- Decision: structured-output retry path.
+- After: emits JudicialOpinion(Defense).
+- Next: opinions_aggregator.
 
-### Report Accuracy (Cross-Reference) (report_accuracy)
-Final score: 2 / 5
-Judge opinions:
-- Defense: 2/5
-  Argument: effort: offline deterministic evaluation for report_accuracy. evidence_items=3 any_negative=True.
-  Cited evidence: pdf
-- Prosecutor: 2/5
-  Argument: risk: offline deterministic evaluation for report_accuracy. evidence_items=3 any_negative=True.
-  Cited evidence: pdf
-- TechLead: 2/5
-  Argument: maintainability: offline deterministic evaluation for report_accuracy. evidence_items=3 any_negative=True.
-  Cited evidence: pdf
-Remediation:
-Report references files that do not exist. Claims parallel execution but code shows linear flow. Multiple hallucinated paths detected.
+### 10) tech_lead
+- Before: criterion + evidence bundle.
+- Logic: practical architecture/maintainability scoring.
+- Decision: structured-output retry path.
+- After: emits JudicialOpinion(TechLead).
+- Next: opinions_aggregator.
 
-### Architectural Diagram Analysis (swarm_visual)
-Final score: 2 / 5
-Dissent:
-Fact supremacy applied: negative/missing evidence capped criterion score.
-Judge opinions:
-- Defense: 2/5
-  Argument: effort: offline deterministic evaluation for swarm_visual. evidence_items=2 any_negative=True.
-  Cited evidence: vision
-- Prosecutor: 2/5
-  Argument: risk: offline deterministic evaluation for swarm_visual. evidence_items=2 any_negative=True.
-  Cited evidence: vision
-- TechLead: 2/5
-  Argument: maintainability: offline deterministic evaluation for swarm_visual. evidence_items=2 any_negative=True.
-  Cited evidence: vision
-Remediation:
-Generic box-and-arrow diagram with no indication of parallelism. Or no diagram present at all. Diagram shows linear flow that contradicts the parallel architecture claimed in the report.
+### 11) opinions_aggregator
+- Before: parallel judge opinions.
+- Logic: summarize per-criterion opinion counts.
+- Decision: always continue to synthesis.
+- After: emits opinions_summary evidence.
+- Next: chief_justice.
 
-## Remediation Plan
-Fix lowest scores first.
-- Git Forensic Analysis score=2
-- State Management Rigor score=2
-- Graph Orchestration Architecture score=2
-- Safe Tool Engineering score=2
-- Structured Output Enforcement score=2
+### 12) chief_justice
+- Before: evidence map + opinions (or abort evidence).
+- Logic: deterministic synthesis rules (security gate, fact supremacy, functionality weight, variance re-evaluation).
+- Decision: apply caps/overrides only when rule conditions hold.
+- After: emits final_report and final_report_markdown.
+- Next: END.
+
+## End-to-End Execution Steps
+1. START fans out detectives: repo_investigator, doc_analyst, vision_inspector.
+2. Detective outputs fan in at evidence_aggregator.
+3. orchestration_guard validates minimum required evidence keys.
+4. Guard fail path: abort -> chief_justice -> END.
+5. Guard pass path: judges_dispatch -> parallel judges -> opinions_aggregator -> chief_justice -> END.
+6. Final output is always structured, including guarded-abort runs.
+

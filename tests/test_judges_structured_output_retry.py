@@ -30,6 +30,54 @@ class _AlwaysFailLLM:
         raise ValueError("still malformed")
 
 
+class _NoConfirmedFlawsLLM:
+    def with_structured_output(self, *_args, **_kwargs):
+        return self
+
+    def invoke(self, _prompt: str) -> JudicialOpinion:
+        return JudicialOpinion(
+            judge="Prosecutor",
+            criterion_id="safe_tool_engineering",
+            score=5,
+            argument=(
+                "There is no evidence of a confirmed security flaw. "
+                "This implementation aligns with best practices."
+            ),
+            cited_evidence=["src/tools"],
+        )
+
+
+class _AbsenceOfEvidenceLLM:
+    def with_structured_output(self, *_args, **_kwargs):
+        return self
+
+    def invoke(self, _prompt: str) -> JudicialOpinion:
+        return JudicialOpinion(
+            judge="Prosecutor",
+            criterion_id="safe_tool_engineering",
+            score=5,
+            argument=(
+                "The absence of evidence for a confirmed security flaw is in the "
+                "developer's favor."
+            ),
+            cited_evidence=["src/tools"],
+        )
+
+
+class _AbsenceOfAnyConfirmedFlawLLM:
+    def with_structured_output(self, *_args, **_kwargs):
+        return self
+
+    def invoke(self, _prompt: str) -> JudicialOpinion:
+        return JudicialOpinion(
+            judge="Prosecutor",
+            criterion_id="safe_tool_engineering",
+            score=5,
+            argument="The absence of any confirmed security flaw is noted.",
+            cited_evidence=["src/tools"],
+        )
+
+
 def _state() -> dict:
     return {
         "offline_mode": False,
@@ -94,3 +142,35 @@ def test_retry_telemetry_records_fallback_after_max_retries(monkeypatch) -> None
     assert "fallback_used=true" in (telemetry.content or "")
     assert opinion.score == 1
     assert "structured output failure" in opinion.argument
+
+
+def test_negated_security_phrase_does_not_trigger_cap(monkeypatch) -> None:
+    monkeypatch.setattr("src.nodes.judges._judge_llm", lambda: _NoConfirmedFlawsLLM())
+
+    out = prosecutor(_state())
+    opinion = out["opinions"][0]
+
+    assert opinion.score == 5
+    assert "Security claim not supported by evidence" not in opinion.argument
+
+
+def test_absence_of_evidence_phrase_does_not_trigger_cap(monkeypatch) -> None:
+    monkeypatch.setattr("src.nodes.judges._judge_llm", lambda: _AbsenceOfEvidenceLLM())
+
+    out = prosecutor(_state())
+    opinion = out["opinions"][0]
+
+    assert opinion.score == 5
+    assert "Security claim not supported by evidence" not in opinion.argument
+
+
+def test_absence_of_any_confirmed_flaw_phrase_does_not_trigger_cap(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.nodes.judges._judge_llm", lambda: _AbsenceOfAnyConfirmedFlawLLM()
+    )
+
+    out = prosecutor(_state())
+    opinion = out["opinions"][0]
+
+    assert opinion.score == 5
+    assert "Security claim not supported by evidence" not in opinion.argument

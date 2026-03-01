@@ -196,7 +196,7 @@ def analyze_pdf_diagrams_safe(pdf_path: str) -> List[Evidence]:
 
         rationale = "Extracted embedded image metadata and diagram label cues from PDF"
 
-        return [
+        out: List[Evidence] = [
             Evidence(
                 goal="swarm_visual",
                 found=found,
@@ -206,6 +206,42 @@ def analyze_pdf_diagrams_safe(pdf_path: str) -> List[Evidence]:
                 confidence=confidence,
             )
         ]
+
+        # Add page-level deterministic evidence so judges can cite concrete pages.
+        for page_no in pages_with_images[:24]:
+            page_meta = [m for m in img_meta if m.startswith(f"page={page_no} ")]
+            out.append(
+                Evidence(
+                    goal="swarm_visual",
+                    found=True,
+                    content=("\n".join(page_meta[:5]) if page_meta else "Embedded image detected"),
+                    location=f"pdf:page={page_no}",
+                    rationale="Page contains embedded image object(s)",
+                    confidence=0.9,
+                )
+            )
+
+        for snip in label_snips[:24]:
+            page_no = None
+            if snip.startswith("page="):
+                head = snip.split(" ", 1)[0]
+                try:
+                    page_no = int(head.split("=", 1)[1])
+                except Exception:
+                    page_no = None
+
+            out.append(
+                Evidence(
+                    goal="swarm_visual",
+                    found=True,
+                    content=snip,
+                    location=(f"pdf:page={page_no}" if page_no else "pdf"),
+                    rationale="Diagram/parallel terminology found in page text",
+                    confidence=0.8,
+                )
+            )
+
+        return out
     except Exception as e:
         return [
             Evidence(

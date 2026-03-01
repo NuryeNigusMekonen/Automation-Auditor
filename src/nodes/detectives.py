@@ -91,16 +91,87 @@ def repo_investigator(state: AgentState) -> Dict:
         )
     ]
 
-    justice_presence: List[Evidence] = [
-        Evidence(
-            goal="chief_justice_synthesis",
-            found=justice_file.exists(),
-            content=rel(justice_file) if justice_file.exists() else None,
-            location=(rel(justice_file) if justice_file.exists() else "repo"),
-            rationale="Presence check for chief justice synthesis node",
-            confidence=0.8,
-        )
-    ]
+    justice_text = None
+    if justice_file.exists():
+        try:
+            justice_text = justice_file.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            justice_text = None
+
+    if justice_text:
+        checks = {
+            "has_chief_justice_fn": "def chief_justice(" in justice_text,
+            "has_rule_security_override": (
+                "security_override_signal" in justice_text
+                and "prosecutor_confirms" in justice_text
+                and "overall = min(overall, 3.0)" in justice_text
+            ),
+            "has_rule_fact_supremacy": (
+                "_apply_fact_supremacy" in justice_text
+                and "negative/missing evidence" in justice_text
+            ),
+            "has_rule_functionality_weight": (
+                "graph_orchestration" in justice_text and "TechLead" in justice_text
+            ),
+            "has_rule_variance_reevaluation": (
+                "_re_evaluate_high_variance" in justice_text
+                and "if var > 2" in justice_text
+            ),
+            "has_structured_markdown_output": (
+                "# Audit Report" in justice_text and "final_report_markdown" in justice_text
+            ),
+            "has_dissent_summary_logic": "dissent_summary" in justice_text,
+        }
+
+        lines: List[str] = [f"{k}={v}" for k, v in checks.items()]
+        snippet_needles = [
+            "def chief_justice(",
+            "def _apply_fact_supremacy(",
+            "def _re_evaluate_high_variance(",
+            "if var > 2",
+            "overall = min(overall, 3.0)",
+            "if criterion_id == \"graph_orchestration\" and \"TechLead\" in scores:",
+            "# Audit Report",
+            "final_report_markdown",
+            "dissent_summary",
+        ]
+
+        hit_snips: List[str] = []
+        for line in justice_text.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            if any(n in s for n in snippet_needles):
+                hit_snips.append(s)
+            if len(hit_snips) >= 40:
+                break
+
+        if hit_snips:
+            lines.append("snippets:")
+            lines.extend(hit_snips)
+
+        confidence = 0.95 if all(checks.values()) else 0.88
+        justice_presence: List[Evidence] = [
+            Evidence(
+                goal="chief_justice_synthesis",
+                found=True,
+                content="\n".join(lines),
+                location=rel(justice_file),
+                rationale="Deterministic static verification of Chief Justice synthesis rules and markdown output path",
+                confidence=confidence,
+            )
+        ]
+    else:
+        justice_presence = [
+            Evidence(
+                goal="chief_justice_synthesis",
+                found=False,
+                content="Chief Justice file missing or unreadable",
+                location=(rel(justice_file) if justice_file.exists() else "repo"),
+                rationale="Could not verify deterministic synthesis rule implementation",
+                confidence=0.8,
+            )
+        ]
 
     judge_text = None
     if judge_file.exists():
